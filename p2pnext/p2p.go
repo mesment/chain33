@@ -2,24 +2,26 @@ package p2pnext
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-
 	"time"
 
 	"github.com/33cn/chain33/client"
 	l "github.com/33cn/chain33/common/log/log15"
+	"github.com/33cn/chain33/p2pnext/dht"
 	"github.com/33cn/chain33/p2pnext/manage"
+
 	"github.com/33cn/chain33/p2pnext/protocol"
 	prototypes "github.com/33cn/chain33/p2pnext/protocol/types"
 	"github.com/33cn/chain33/queue"
 	"github.com/33cn/chain33/types"
 	libp2p "github.com/libp2p/go-libp2p"
 	core "github.com/libp2p/go-libp2p-core"
-	"github.com/libp2p/go-libp2p-core/crypto"
+
+	//"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/metrics"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/peerstore"
+
+	//"github.com/libp2p/go-libp2p-core/peer"
+	//"github.com/libp2p/go-libp2p-core/peerstore"
 	multiaddr "github.com/multiformats/go-multiaddr"
 )
 
@@ -28,38 +30,35 @@ var logger = l.New("module", "p2pnext")
 type P2P struct {
 	chainCfg      *types.Chain33Config
 	host          core.Host
-	discovery     *Discovery
+	discovery     *dht.Discovery
 	connManag     *manage.ConnManager
 	peerInfoManag *manage.PeerInfoManager
 	api           client.QueueProtocolAPI
 	client        queue.Client
 	Done          chan struct{}
+	addrbook      *AddrBook
 	Node          *Node
 }
 
 func New(cfg *types.Chain33Config) *P2P {
 
-	m, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", cfg.GetModuleConfig().P2P.Port))
+	mcfg := cfg.GetModuleConfig().P2P
+	if mcfg.Port == 0 {
+		mcfg.Port = 13803
+	}
+
+	m, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", mcfg.Port))
 	if err != nil {
 		return nil
 	}
-	localAddr := getNodeLocalAddr()
-	lm, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%v/tcp/%d", localAddr, cfg.GetModuleConfig().P2P.Port))
-	var addrlist []multiaddr.Multiaddr
-	addrlist = append(addrlist, m)
-	addrlist = append(addrlist, lm)
-	keystr, _ := NewAddrBook(cfg.GetModuleConfig().P2P).GetPrivPubKey()
-	logger.Info("loadPrivkey:", keystr)
-	//key string convert to crpyto.Privkey
-	key, _ := hex.DecodeString(keystr)
-	priv, err := crypto.UnmarshalSecp256k1PrivateKey(key)
-	if err != nil {
-		panic(err)
-	}
+
+	logger.Info("NewMulti", "addr", m.String())
+	addrbook := NewAddrBook(cfg.GetModuleConfig().P2P)
+	priv := addrbook.GetPrivkey()
 
 	bandwidthTracker := metrics.NewBandwidthCounter()
 	host, err := libp2p.New(context.Background(),
-		libp2p.ListenAddrs(addrlist...),
+		libp2p.ListenAddrs(m),
 		libp2p.Identity(priv),
 		libp2p.BandwidthReporter(bandwidthTracker),
 		libp2p.NATPortMap(),
@@ -69,53 +68,41 @@ func New(cfg *types.Chain33Config) *P2P {
 		panic(err)
 	}
 	p2p := &P2P{host: host}
-	p2p.connManag = manage.NewConnManager()
 	p2p.peerInfoManag = manage.NewPeerInfoManager()
 	p2p.chainCfg = cfg
-	p2p.discovery = new(Discovery)
-	p2p.Node = NewNode(p2p, cfg)
+	p2p.addrbook = addrbook
+	p2p.discovery = new(dht.Discovery)
+	p2p.connManag = manage.NewConnManager(p2p.host, p2p.discovery, bandwidthTracker)
 
+	p2p.Node = NewNode(p2p, cfg)
 	logger.Info("NewP2p", "peerId", p2p.host.ID(), "addrs", p2p.host.Addrs())
 	return p2p
-
 }
 
 func (p *P2P) managePeers() {
+	p.discovery.InitDht(p.host, p.Node.p2pCfg.Seeds, p.addrbook.AddrsInfo())
 
-	peerChan, err := p.discovery.FindPeers(context.Background(), p.host, p.Node.p2pCfg.Seeds)
-	if err != nil {
-		panic("PeerFind Err")
-	}
+	go p.connManag.MonitorAllPeers(p.Node.p2pCfg.Seeds, p.host)
 
-	for peer := range peerChan {
-		logger.Info("find peer", "peer", peer)
+	for {
+		peerlist := p.discovery.RoutingTale()
+		logger.Info("managePeers", "RoutingTale show peerlist>>>>>>>>>", peerlist,
+			"table size", p.discovery.RoutingTableSize())
 
-		if peer.ID == p.host.ID() {
-			logger.Info("Find self...")
-			continue
-		}
-		logger.Info("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxp2p.FindPeers", "addrs", peer.Addrs, "id", peer.ID.String(),
-			"peer", peer.String())
+		select {
+		case <-time.After(time.Minute):
+			for _, paddrs := range p.host.Peerstore().Peers() {
+				p.discovery.UPdate(paddrs)
+			}
+			//Reflash addrbook
+			peersInfo := p.discovery.FindLocalPeers(p.connManag.Fetch())
+			p.addrbook.SaveAddr(peersInfo)
 
-		p.newConn(context.Background(), peer)
-	Recheck:
-		if p.connManag.Size() >= 25 {
-			//达到连接节点数最大要求
-			time.Sleep(time.Second * 10)
-			goto Recheck
+		case <-p.Done:
+			return
 		}
 	}
 
-}
-func (p *P2P) Wait() {
-
-}
-
-func (p *P2P) Close() {
-	close(p.Done)
-	logger.Info("p2p closed")
-
-	return
 }
 
 // SetQueueClient
@@ -128,11 +115,13 @@ func (p *P2P) SetQueueClient(cli queue.Client) {
 	if p.client == nil {
 		p.client = cli
 	}
+	//提供给其他插件使用的共享接口
 	globalData := &prototypes.GlobalData{
 		ChainCfg:        p.chainCfg,
 		QueueClient:     p.client,
 		Host:            p.host,
 		ConnManager:     p.connManag,
+		Discovery:       p.discovery,
 		PeerInfoManager: p.peerInfoManag,
 	}
 	protocol.Init(globalData)
@@ -151,18 +140,13 @@ func (p *P2P) processP2P() {
 	}
 }
 
-func (p *P2P) newConn(ctx context.Context, pr peer.AddrInfo) error {
+func (p *P2P) Wait() {
 
-	//可以后续添加 block.ID,mempool.ID,header.ID
-	p.host.Peerstore().AddAddrs(pr.ID, pr.Addrs, peerstore.AddressTTL)
-	logger.Info("newStream", "MsgIds size", len(protocol.MsgIDs), "msgIds", protocol.MsgIDs)
-	stream, err := p.host.NewStream(ctx, pr.ID, protocol.MsgIDs...)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-	logger.Info("NewStream", "Pid", pr.ID)
-	p.connManag.Add(pr.ID.String(), stream.Conn())
-	return nil
+}
 
+func (p *P2P) Close() {
+	close(p.Done)
+	logger.Info("p2p closed")
+
+	return
 }
