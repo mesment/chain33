@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	log = log15.New("module", "p2p.manage")
+	log = log15.New("module", "p2p.connManage")
 )
 
 type ConnManager struct {
@@ -24,6 +24,7 @@ type ConnManager struct {
 	pstore           peerstore.Peerstore
 	bandwidthTracker *metrics.BandwidthCounter
 	discovery        *dht.Discovery
+	Done             chan struct{}
 }
 
 func NewConnManager(host core.Host, discovery *dht.Discovery, tracker *metrics.BandwidthCounter) *ConnManager {
@@ -32,8 +33,20 @@ func NewConnManager(host core.Host, discovery *dht.Discovery, tracker *metrics.B
 	connM.host = host
 	connM.discovery = discovery
 	connM.bandwidthTracker = tracker
+	connM.Done = make(chan struct{}, 1)
 	return connM
 
+}
+
+func (s *ConnManager) Close() {
+
+	defer func() {
+		if recover() != nil {
+			log.Error("channel reclosed")
+		}
+	}()
+
+	close(s.Done)
 }
 
 func (s *ConnManager) RecoredLatency(pid peer.ID, ttl time.Duration) {
@@ -78,6 +91,8 @@ func (s *ConnManager) MonitorAllPeers(seeds []string, host core.Host) {
 
 			log.Info("-------------------------------------")
 			log.Info("MounitorAllPeers", "peerstore peers", s.pstore.Peers(), "connPeer num", s.Size())
+		case <-s.Done:
+			return
 
 		}
 	}

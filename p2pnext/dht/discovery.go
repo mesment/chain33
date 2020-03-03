@@ -7,20 +7,17 @@ import (
 	kbt "github.com/libp2p/go-libp2p-kbucket"
 
 	"github.com/33cn/chain33/common/log/log15"
-	//ds "github.com/ipfs/go-datastore"
-	//dsync "github.com/ipfs/go-datastore/sync"
 	host "github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/peerstore"
 	"github.com/libp2p/go-libp2p-discovery"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 
-	//rhost "github.com/libp2p/go-libp2p/p2p/host/routed"
 	multiaddr "github.com/multiformats/go-multiaddr"
 )
 
 var (
-	log = log15.New("module", "p2p.manage")
+	log = log15.New("module", "p2p.dht")
 )
 
 const RendezvousString = "chain33-p2p-findme"
@@ -63,13 +60,13 @@ func (d *Discovery) InitDht(host host.Host, seeds []string, peersInfo []peer.Add
 	if err := d.KademliaDHT.Bootstrap(context.Background()); err != nil {
 		panic(err)
 	}
-	d.routingDiscovery = discovery.NewRoutingDiscovery(d.KademliaDHT)
-	discovery.Advertise(context.Background(), d.routingDiscovery, RendezvousString)
+
 	return
 }
 
 func (d *Discovery) FindPeers() (<-chan peer.AddrInfo, error) {
-
+	d.routingDiscovery = discovery.NewRoutingDiscovery(d.KademliaDHT)
+	discovery.Advertise(context.Background(), d.routingDiscovery, RendezvousString)
 	peerChan, err := d.routingDiscovery.FindPeers(context.Background(), RendezvousString)
 	if err != nil {
 		panic(err)
