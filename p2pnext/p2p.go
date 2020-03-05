@@ -70,7 +70,7 @@ func New(mgr *p2pmgr.P2PMgr, subCfg []byte) p2pmgr.IP2P {
 	host := newHost(mcfg, priv, bandwidthTracker)
 	p2p := &P2P{
 		host:          host,
-		peerInfoManag: manage.NewPeerInfoManager(),
+		peerInfoManag: manage.NewPeerInfoManager(mgr.Client),
 		chainCfg:      chainCfg,
 		subCfg:        mcfg,
 		p2pCfg:        p2pCfg,
@@ -151,11 +151,11 @@ func (p *P2P) StartP2P() {
 	//初始化dht列表需要优先执行, 否则放在协程中有先后秩序问题, 导致未初始化在其他协程中被使用
 	p.discovery.InitDht(p.host, p.subCfg.Seeds, p.addrbook.AddrsInfo())
 	go p.managePeers()
-	go p.processP2P()
+	go p.handleP2PEvent()
 
 }
 
-func (p *P2P) processP2P() {
+func (p *P2P) handleP2PEvent() {
 
 	p.subChan = p.mgr.PubSub.Sub(p2pmgr.DHTTypeName)
 	//TODO, control goroutine num
@@ -165,32 +165,17 @@ func (p *P2P) processP2P() {
 		}
 		msg, ok := data.(*queue.Message)
 		if !ok {
-			log.Error("processP2P", "recv invalid msg, data=", data)
+			log.Error("handleP2PEvent", "recv invalid msg, data=", data)
 		}
 		p.taskGroup.Add(1)
 		go func(qmsg *queue.Message) {
 			defer p.taskGroup.Done()
-
-			log.Debug("processP2P", "recv msg ty", qmsg.Ty)
-
+			log.Debug("handleP2PEvent", "recv msg ty", qmsg.Ty)
 			protocol.HandleEvent(qmsg)
 
 		}(msg)
 
 	}
-}
-
-func (p *P2P) Wait() {
-
-}
-
-func (p *P2P) ReStart() {
-	/*client := p.client
-	p.Close()
-	p = New(p.chainCfg)
-	p.client = client
-	p.StartP2P()*/
-
 }
 
 func (p *P2P) CloseP2P() {
@@ -199,9 +184,9 @@ func (p *P2P) CloseP2P() {
 	atomic.StoreInt32(&p.closed, 1)
 	p.waitTaskDone()
 	p.connManag.Close()
+	p.peerInfoManag.Close()
 	p.host.Close()
 	prototypes.ClearEventHandler()
-
 }
 
 func (p *P2P) isClose() bool {

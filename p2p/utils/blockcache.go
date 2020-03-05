@@ -1,16 +1,12 @@
-package p2p
+// Copyright Fuzamei Corp. 2018 All Rights Reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+package utils
 
 import (
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru"
-)
-
-var (
-	//发送交易短哈希广播,在本地暂时缓存一些区块数据, 限制最大大小
-	totalBlockCache = NewSpaceLimitCache(BlockCacheNum, MaxBlockCacheByteSize)
-	//接收到短哈希区块数据,只构建出区块部分交易,需要缓存, 并继续向对端节点请求剩余数据
-	ltBlockCache = NewSpaceLimitCache(BlockCacheNum/2, MaxBlockCacheByteSize/2)
 )
 
 // lru缓存封装, 控制占用空间大小
