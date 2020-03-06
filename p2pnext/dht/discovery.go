@@ -2,6 +2,7 @@ package dht
 
 import (
 	"context"
+
 	"time"
 
 	kbt "github.com/libp2p/go-libp2p-kbucket"
@@ -12,15 +13,17 @@ import (
 	"github.com/libp2p/go-libp2p-core/peerstore"
 	discovery "github.com/libp2p/go-libp2p-discovery"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	protocol  "github.com/libp2p/go-libp2p-core/protocol"
 
 	multiaddr "github.com/multiformats/go-multiaddr"
+	opts "github.com/libp2p/go-libp2p-kad-dht/opts"
 )
 
 var (
 	log = log15.New("module", "p2p.dht")
 )
 
-const RendezvousString = "chain33-let's test"
+const RendezvousString = "chain33-let's play!"
 
 type Discovery struct {
 	KademliaDHT      *dht.IpfsDHT
@@ -30,7 +33,9 @@ type Discovery struct {
 
 func (d *Discovery) InitDht(host host.Host, seeds []string, peersInfo []peer.AddrInfo) {
 	// Make the DHT
-	kademliaDHT, _ := dht.New(context.Background(), host)
+
+	opt := opts.Protocols(protocol.ID("/ipfs/kad/chain33/1.0.0"))
+	kademliaDHT, _ := dht.New(context.Background(), host, opt)
 	d.KademliaDHT = kademliaDHT
 
 	for _, seed := range seeds {
