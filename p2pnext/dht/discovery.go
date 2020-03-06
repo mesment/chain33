@@ -20,7 +20,7 @@ var (
 	log = log15.New("module", "p2p.dht")
 )
 
-const RendezvousString = "chain33-let's play!"
+const RendezvousString = "chain33-let's test"
 
 type Discovery struct {
 	KademliaDHT      *dht.IpfsDHT
