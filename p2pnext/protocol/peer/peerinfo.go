@@ -40,9 +40,9 @@ type PeerInfoProtol struct {
 	mutex        sync.Mutex
 }
 
-func (p *PeerInfoProtol) InitProtocol(data *prototypes.GlobalData) {
-	p.GlobalData = data
-	p.p2pCfg = data.SubConfig
+func (p *PeerInfoProtol) InitProtocol(env *prototypes.P2PEnv) {
+	p.P2PEnv = env
+	p.p2pCfg = env.SubConfig
 	prototypes.RegisterEventHandler(types.EventPeerInfo, p.handleEvent)
 	prototypes.RegisterEventHandler(types.EventGetNetInfo, p.netinfoHandleEvent)
 	go p.DetectNodeAddr()
@@ -154,10 +154,10 @@ func (p *PeerInfoProtol) GetPeerInfo() []*types.P2PPeerInfo {
 func (p *PeerInfoProtol) SetExternalAddr(addr string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	if len(strings.Split(externalAddr, "/")) < 2 {
+	if len(strings.Split(addr, "/")) < 2 {
 		return
 	}
-	p.externalAddr = strings.Split(externalAddr, "/")[2]
+	p.externalAddr = strings.Split(addr, "/")[2]
 }
 
 func (p *PeerInfoProtol) GetExternalAddr() string {
@@ -241,11 +241,14 @@ func (p *PeerInfoProtol) handleEvent(msg *queue.Message) {
 		var peer types.Peer
 		p.PeerInfoManager.Copy(&peer, pinfo)
 		peers = append(peers, &peer)
+		//增加peerInfo 到peerInfoManager
+		p.PeerInfoManager.Add(peer.GetName(), &peer)
 	}
 	peerinfo := p.getLoacalPeerInfo()
 	p.PeerInfoManager.Copy(&peer, peerinfo)
 	peer.Self = true
 	peers = append(peers, &peer)
+
 	msg.Reply(p.GetQueueClient().NewMessage("blockchain", types.EventPeerList, &types.PeerList{Peers: peers}))
 
 }
@@ -279,9 +282,4 @@ func (h *PeerInfoHandler) Handle(stream core.Stream) {
 
 	}
 
-}
-
-func (p *PeerInfoHandler) VerifyRequest(data []byte, messageComm *types.MessageComm) bool {
-
-	return true
 }

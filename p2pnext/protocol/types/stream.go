@@ -27,7 +27,7 @@ var (
 	streamHandlerTypeMap = make(map[string]reflect.Type)
 )
 
-//注册typeName,msgID,处理函数
+// RegisterStreamHandlerType 注册typeName,msgID,处理函数
 func RegisterStreamHandlerType(typeName, msgID string, handler StreamHandler) {
 
 	if handler == nil {
@@ -69,41 +69,46 @@ type StreamHandler interface {
 	// SetProtocol 初始化公共结构, 内部通过protocol获取外部依赖公共类, 如queue.client等
 	SetProtocol(protocol IProtocol)
 	// VerifyRequest  验证请求数据
-	VerifyRequest(request []byte, messageComm *types.MessageComm) bool
+	VerifyRequest(message proto.Message, messageComm *types.MessageComm) bool
+	//SignMessage
+	SignProtoMessage(message proto.Message, host core.Host) ([]byte, error)
 	// Handle 处理请求
 	Handle(stream core.Stream)
 }
 
+// BaseStreamHandler base stream handler
 type BaseStreamHandler struct {
 	Protocol IProtocol
 	child    StreamHandler
 }
 
+// SetProtocol set protocol
 func (s *BaseStreamHandler) SetProtocol(protocol IProtocol) {
 	s.Protocol = protocol
 }
 
+// Handle handle stream
 func (s *BaseStreamHandler) Handle(core.Stream) {
 	return
 }
 
-func (s *BaseStreamHandler) VerifyRequest(request []byte, messageComm *types.MessageComm) bool {
+func (s *BaseStreamHandler) SignProtoMessage(message proto.Message, host core.Host) ([]byte, error) {
+	return SignProtoMessage(message, host)
+}
+
+func (s *BaseStreamHandler) VerifyRequest(message proto.Message, messageComm *types.MessageComm) bool {
 	//基类统一验证数据, 不需要验证,重写该方法直接返回true
 
-	peerID, err := peer.IDB58Decode(messageComm.GetNodeId())
-	if err != nil {
-		return false
-	}
-
-	return verifyData(request, messageComm.GetSign(), peerID, messageComm.GetNodePubKey())
+	return AuthenticateMessage(message, messageComm)
 
 }
 
+// GetProtocol get protocol
 func (s *BaseStreamHandler) GetProtocol() IProtocol {
 	return s.Protocol
 }
 
-//stream事件预处理函数
+// HandleStream stream事件预处理函数
 func (s *BaseStreamHandler) HandleStream(stream core.Stream) {
 	log.Debug("BaseStreamHandler", "HandlerStream", stream.Conn().RemoteMultiaddr().String(), "proto", stream.Protocol())
 	//TODO verify校验放在这里
@@ -127,12 +132,12 @@ func (s *BaseStreamHandler) SendToStream(pid string, data proto.Message, msgID p
 	}
 	stream, err := host.NewStream(context.Background(), rID, msgID)
 	if err != nil {
-		log.Error(" SendToStream NewStream", "err", err, "remoteID", rID)
+		log.Error("SendToStream NewStream", "err", err, "remoteID", rID)
 		return nil, err
 	}
 	err = s.SendProtoMessage(data, stream)
 	if err != nil {
-		log.Error("SendToStream", "sendProtMessage err", err)
+		log.Error("SendToStream", "sendProtMessage err", err, "remoteID", rID)
 	}
 
 	return stream, err
