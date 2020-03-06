@@ -38,6 +38,17 @@ func TestGoMemDBIteratorDel(t *testing.T) {
 	testDBIteratorDel(t, memdb)
 }
 
+func TestGoMemDBBatch(t *testing.T) {
+	dir, err := ioutil.TempDir("", "gomemdb")
+	require.NoError(t, err)
+	t.Log(dir)
+
+	leveldb, err := NewGoMemDB("gomemdb", dir, 128)
+	require.NoError(t, err)
+	defer leveldb.Close()
+	testBatch(t, leveldb)
+}
+
 // memdb边界测试
 func TestGoMemDBBoundary(t *testing.T) {
 	dir, err := ioutil.TempDir("", "gomemdb")
@@ -74,8 +85,8 @@ func BenchmarkRandomGoMemDBReadsWrites(b *testing.B) {
 			idx := (int64(RandInt()) % numItems)
 			internal[idx]++
 			val := internal[idx]
-			idxBytes := int642Bytes(int64(idx))
-			valBytes := int642Bytes(int64(val))
+			idxBytes := int642Bytes(idx)
+			valBytes := int642Bytes(val)
 			//fmt.Printf("Set %X -> %X\n", idxBytes, valBytes)
 			db.Set(
 				idxBytes,
@@ -86,7 +97,7 @@ func BenchmarkRandomGoMemDBReadsWrites(b *testing.B) {
 		{
 			idx := (int64(RandInt()) % numItems)
 			val := internal[idx]
-			idxBytes := int642Bytes(int64(idx))
+			idxBytes := int642Bytes(idx)
 			valBytes, _ := db.Get(idxBytes)
 			//fmt.Printf("Get %X -> %X\n", idxBytes, valBytes)
 			if val == 0 {

@@ -6,13 +6,14 @@ package executor
 
 import (
 	"bytes"
-	"runtime/debug"
+
+	"github.com/pkg/errors"
 
 	drivers "github.com/33cn/chain33/system/dapp"
 	"github.com/33cn/chain33/types"
 )
 
-func isAllowKeyWrite(key, realExecer []byte, tx *types.Transaction, height int64) bool {
+func isAllowKeyWrite(e *executor, key, realExecer []byte, tx *types.Transaction, index int) bool {
 	keyExecer, err := types.FindExecer(key)
 	if err != nil {
 		elog.Error("find execer ", "err", err, "key", string(key), "keyexecer", string(keyExecer))
@@ -20,7 +21,8 @@ func isAllowKeyWrite(key, realExecer []byte, tx *types.Transaction, height int64
 	}
 	//平行链中 user.p.guodun.xxxx -> 实际上是 xxxx
 	//注意: user.p.guodun.user.evm.hash -> user.evm.hash 而不是 evm
-	exec := types.GetParaExec(tx.Execer)
+	cfg := e.api.GetConfig()
+	exec := cfg.GetParaExec(tx.Execer)
 	//默认规则1: (执行器只能修改执行器自己内部的数据)
 	if bytes.Equal(keyExecer, exec) {
 		return true
@@ -28,7 +30,7 @@ func isAllowKeyWrite(key, realExecer []byte, tx *types.Transaction, height int64
 	// 历史原因做只针对对bityuan的fork特殊化处理一下
 	// manage 的key 是 config
 	// token 的部分key 是 mavl-create-token-
-	if !types.IsFork(height, "ForkExecKey") {
+	if !cfg.IsFork(e.height, "ForkExecKey") {
 		if bytes.Equal(exec, []byte("manage")) && bytes.Equal(keyExecer, []byte("config")) {
 			return true
 		}
@@ -52,39 +54,52 @@ func isAllowKeyWrite(key, realExecer []byte, tx *types.Transaction, height int64
 		//判断user.p.xxx.token 是否可以写 token 合约的内容之类的
 		execdriver = realExecer
 	}
-	d, err := drivers.LoadDriver(string(execdriver), height)
-	if err != nil {
-		elog.Error("load drivers error", "err", err, "execdriver", string(execdriver), "height", height)
-		return false
-	}
+	c := e.loadDriver(&types.Transaction{Execer: execdriver}, index)
 	//交给 -> friend 来判定
-	return d.IsFriend(execdriver, key, tx)
+	return c.IsFriend(execdriver, key, tx)
 }
 
-func isAllowLocalKey(execer []byte, key []byte) error {
-	execer = types.GetRealExecName(execer)
-	//println(string(execer), string(key))
+func isAllowLocalKey(cfg *types.Chain33Config, execer []byte, key []byte) error {
+	err := isAllowLocalKey2(cfg, execer, key)
+	if err != nil {
+		realexec := types.GetRealExecName(execer)
+		if !bytes.Equal(realexec, execer) {
+			err2 := isAllowLocalKey2(cfg, realexec, key)
+			err = errors.Wrapf(err2, "1st check err: %s. 2nd check err", err.Error())
+		}
+		if err != nil {
+			elog.Error("isAllowLocalKey failed", "err", err.Error())
+			return errors.Cause(err)
+		}
+
+	}
+	return nil
+}
+
+func isAllowLocalKey2(cfg *types.Chain33Config, execer []byte, key []byte) error {
+	if len(execer) < 1 {
+		return errors.Wrap(types.ErrLocalPrefix, "execer empty")
+	}
 	minkeylen := len(types.LocalPrefix) + len(execer) + 2
 	if len(key) <= minkeylen {
-		debug.PrintStack()
-		elog.Error("isAllowLocalKey too short", "key", string(key), "exec", string(execer))
-		return types.ErrLocalKeyLen
+		err := errors.Wrapf(types.ErrLocalKeyLen, "isAllowLocalKey too short. key=%s exec=%s", string(key), string(execer))
+		return err
 	}
-	if key[minkeylen-1] != '-' {
-		debug.PrintStack()
-		elog.Error("isAllowLocalKey prefix last char is not '-'", "key", string(key), "exec", string(execer),
-			"minkeylen", minkeylen)
-		return types.ErrLocalPrefix
+	if key[minkeylen-1] != '-' || key[len(types.LocalPrefix)] != '-' {
+		err := errors.Wrapf(types.ErrLocalPrefix,
+			"isAllowLocalKey prefix last char or separator is not '-'. key=%s exec=%s minkeylen=%d title=%s",
+			string(key), string(execer), minkeylen, cfg.GetTitle())
+		return err
 	}
 	if !bytes.HasPrefix(key, types.LocalPrefix) {
-		debug.PrintStack()
-		elog.Error("isAllowLocalKey common prefix not match", "key", string(key), "exec", string(execer))
-		return types.ErrLocalPrefix
+		err := errors.Wrapf(types.ErrLocalPrefix, "isAllowLocalKey common prefix not match. key=%s exec=%s",
+			string(key), string(execer))
+		return err
 	}
 	if !bytes.HasPrefix(key[len(types.LocalPrefix)+1:], execer) {
-		debug.PrintStack()
-		elog.Error("isAllowLocalKey key prefix not match", "key", string(key), "exec", string(execer))
-		return types.ErrLocalPrefix
+		err := errors.Wrapf(types.ErrLocalPrefix, "isAllowLocalKey key prefix not match. key=%s exec=%s",
+			string(key), string(execer))
+		return err
 	}
 	return nil
 }

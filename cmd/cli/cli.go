@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package main chain33-cli程序入口
 package main
 
 import (
@@ -14,7 +15,7 @@ import (
 
 func main() {
 	if buildflags.RPCAddr == "" {
-		buildflags.RPCAddr = "http://localhost:8801"
+		buildflags.RPCAddr = "http://localhost:8803"
 	}
-	cli.Run(buildflags.RPCAddr, buildflags.ParaName)
+	cli.Run(buildflags.RPCAddr, buildflags.ParaName, "")
 }

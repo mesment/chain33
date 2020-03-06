@@ -27,17 +27,17 @@ message MAVLProof {
 }
 
 message StoreNode {
-    bytes key        = 1;
-    bytes value      = 2;
-    bytes leftHash   = 3;
-    bytes rightHash  = 4;
-    int32 height     = 5;
-    int32 size       = 6;
-    bytes parentHash = 7;
+    bytes key       = 1;
+    bytes value     = 2;
+    bytes leftHash  = 3;
+    bytes rightHash = 4;
+    int32 height    = 5;
+    int32 size      = 6;
 }
 
 message LocalDBSet {
-    repeated KeyValue KV = 2;
+    repeated KeyValue KV   = 2;
+    int64             txid = 5;
 }
 
 message LocalDBList {
@@ -45,10 +45,12 @@ message LocalDBList {
     bytes key       = 2;
     int32 direction = 3;
     int32 count     = 4;
+    int64 txid      = 5;
 }
 
 message LocalDBGet {
     repeated bytes keys = 2;
+    int64          txid = 5;
 }
 
 message LocalReplyValue {
@@ -69,6 +71,7 @@ message StoreDel {
 message StoreSetWithSync {
     StoreSet storeset = 1;
     bool     sync     = 2;
+    bool     upgrade  = 3;
 }
 
 message StoreGet {
@@ -80,13 +83,30 @@ message StoreReplyValue {
     repeated bytes values = 2;
 }
 
+message StoreList {
+    bytes stateHash = 1;
+    bytes start     = 2;
+    bytes end       = 3;
+    bytes suffix    = 4;
+    int64 count     = 5;
+    int64 mode      = 6;
+}
+
+message StoreListReply {
+    bytes    start        = 1;
+    bytes    end          = 2;
+    bytes    suffix       = 3;
+    int64    count        = 4;
+    int64    num          = 5;
+    int64    mode         = 6;
+    bytes    nextKey      = 7;
+    repeated bytes keys   = 8;
+    repeated bytes values = 9;
+}
+
 message PruneData {
-    // 对应keyHash下的区块高度
-    int64 height = 1;
-    // hash+prefix的长度
-    int32 lenth = 2;
-    // 该叶子节点的roothash
-    // bytes rHash  = 3;
+    // 该叶子节点的所有父hash
+    repeated bytes hashs = 1;
 }
 
 //用于存储db Pool数据的Value

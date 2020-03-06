@@ -40,18 +40,19 @@ isParaChain=false
 enableTxQuickIndex=false
 
 [p2p]
-seeds=[]
 enable=true
-isSeed=false
-serverStart=true
-innerSeedEnable=true
-useGithub=true
-innerBounds=300
-msgCacheSize=10240
 driver="leveldb"
 dbPath="datadir/addrbook"
 dbCache=4
 grpcLogFile="grpc33.log"
+
+[p2p.sub.gossip]
+isSeed=false
+serverStart=true
+innerSeedEnable=true
+innerBounds=300
+
+[p2p.sub.dht]
 
 
 [rpc]
@@ -63,7 +64,12 @@ grpcFuncWhitelist=["*"]
 
 [mempool]
 poolCacheSize=10240
-minTxFee=100000
+# 最小得交易手续费率，这个没有默认值，必填，一般是0.001 coins
+minTxFeeRate=10000
+# 最大的交易手续费率, 0.1 coins
+maxTxFeeRate=1000000
+# 单笔交易最大的手续费, 10 coins
+maxTxFee=100000000
 maxTxNumPerAccount=10000
 
 [consensus]
@@ -117,8 +123,7 @@ minerdisable=false
 minerwhitelist=["*"]
 
 [exec]
-isFree=false
-minExecFee=100000
+#交易费相关统一在mempool中配置0
 enableStat=false
 enableMVCC=false
 alias=["token1:token","token2:token","token3:token"]
@@ -147,6 +152,7 @@ ForkV16Withdraw= 480000
 ForkV22ExecRollback= 706531
 ForkV23TxHeight= 806578
 ForkV24TxGroupPara= 806578
+ForkStateDBSet=-1
 
 [fork.sub.manage]
 Enable=120000

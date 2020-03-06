@@ -1,8 +1,9 @@
-# golang1.9 or latest
+# golang1.12 or latest
 # 1. make help
 # 2. make dep
 # 3. make build
 # ...
+export GO111MODULE=on
 SRC := github.com/33cn/chain33/cmd/chain33
 SRC_CLI := github.com/33cn/chain33/cmd/cli
 SRC_SIGNATORY := github.com/33cn/chain33/cmd/signatory-server
@@ -14,9 +15,6 @@ MINER := build/miner_accounts
 AUTOTEST := build/autotest/autotest
 SRC_AUTOTEST := github.com/33cn/chain33/cmd/autotest
 LDFLAGS := -ldflags "-w -s"
-PKG_LIST := `go list ./... | grep -v "vendor" | grep -v "mocks"`
-PKG_LIST_VET := `go list ./... | grep -v "vendor" | grep -v "common/crypto/sha3" | grep -v "common/log/log15"`
-PKG_LIST_Q := `go list ./... | grep -v "vendor" | grep -v "mocks"`
 BUILD_FLAGS = -ldflags "-X github.com/33cn/chain33/common/version.GitCommit=`git rev-parse --short=8 HEAD`"
 MKPATH=$(abspath $(lastword $(MAKEFILE_LIST)))
 MKDIR=$(dir $(MKPATH))
@@ -27,12 +25,13 @@ PROJ := "build"
 default: build cli depends
 
 dep: ## Get the dependencies
-	@go get -u gopkg.in/alecthomas/gometalinter.v2
-	@gometalinter.v2 -i
+	@go get github.com/golangci/golangci-lint/cmd/golangci-lint@v1.17.1
+	@go get -u golang.org/x/tools/cmd/goimports
 	@go get -u github.com/mitchellh/gox
 	@go get -u github.com/vektra/mockery/.../
 	@go get -u mvdan.cc/sh/cmd/shfmt
 	@go get -u mvdan.cc/sh/cmd/gosh
+	@git checkout go.mod go.sum
 	@apt install clang-format
 	@apt install shellcheck
 
@@ -48,7 +47,7 @@ build: ## Build the binary file
 	@cp cmd/chain33/bityuan.toml build/
 
 release: ## Build the binary file
-	@go build -v -i -o $(APP) $(LDFLAGS) $(SRC) 
+	@go build -v -i -o $(APP) $(LDFLAGS) $(SRC)
 	@cp cmd/chain33/chain33.toml build/
 	@cp cmd/chain33/bityuan.toml build/
 	@cp cmd/chain33/chain33.para.toml build/
@@ -67,10 +66,9 @@ para:
 autotest:## build autotest binary
 	@go build -v -i -o $(AUTOTEST) $(SRC_AUTOTEST)
 	@if [ -n "$(dapp)" ]; then \
-		cd build/autotest && bash ./copy-autotest.sh local && cd local && bash ./local-autotest.sh $(dapp) && cd ../../../; \
-	fi
+		cd build/autotest && ./run.sh local $(dapp) && cd ../../; fi
 autotest_ci: autotest ## autotest jerkins ci
-	@cd build/autotest && bash ./copy-autotest.sh jerkinsci/temp$(proj) && cd jerkinsci && bash ./jerkins-ci-autotest.sh $(proj) && cd ../../../
+	@cd build/autotest && ./run.sh jerkinsci $(proj) && cd ../../
 
 signatory:
 	@cd cmd/signatory-server/signatory && bash ./create_protobuf.sh && cd ../.../..
@@ -87,42 +85,31 @@ build_ci: depends ## Build the binary file for CI
 	@go build  $(BUILD_FLAGS) -v -o $(APP) $(SRC)
 	@cp cmd/chain33/chain33.toml build/
 
-linter: vet ## Use gometalinter check code, ignore some unserious warning
-	@res=$$(gometalinter.v2 -t --sort=linter --enable-gc --deadline=2m --disable-all \
-	--enable=gofmt \
-	--enable=gosimple \
-	--enable=deadcode \
-	--enable=unconvert \
-	--enable=interfacer \
-	--enable=varcheck \
-	--enable=structcheck \
-	--enable=goimports \
-	--vendor ./...) \
-#	--enable=vet \
-#	--enable=staticcheck \
-#	--enable=gocyclo \
-#	--enable=staticcheck \
-#	--enable=golint \
-#	--enable=unused \
-#	--enable=gotype \
-#	--enable=gotypex \
-	if [ -n "$$res" ]; then \
-		echo "$${res}"; \
-		exit 1; \
-		fi;
+linter: vet ineffassign gosec ## Use gometalinter check code, ignore some unserious warning
+	@./golinter.sh "filter"
 	@find . -name '*.sh' -not -path "./vendor/*" | xargs shellcheck
 
+linter_test: ## Use gometalinter check code, for local test
+	@./golinter.sh "test" "${p}"
+	@find . -name '*.sh' -not -path "./vendor/*" | xargs shellcheck
+
+gosec:
+	@golangci-lint  run --no-config --issues-exit-code=1  --deadline=2m --disable-all --enable=gosec --skip-dirs=commands
+
 race: ## Run data race detector
-	@go test -race -short $(PKG_LIST)
+	@go test -race -short `go list ./... | grep -v "mocks"`
 
 vet:
-	@go vet ${PKG_LIST_VET}
+	@go vet `go list -f {{.Dir}} ./... | grep -v "common/crypto/sha3"`
+
+ineffassign:
+	@golangci-lint  run --no-config --issues-exit-code=1  --deadline=2m --disable-all   --enable=ineffassign  -n ./...
 
 test: ## Run unittests
-	@go test -race $(PKG_LIST)
+	@go test -race `go list ./... | grep -v "mocks"`
 
 testq: ## Run unittests
-	@go test $(PKG_LIST_Q)
+	@go test `go list ./... | grep -v "mocks"`
 
 fmt: fmt_proto fmt_shell ## go fmt
 	go fmt ./...
@@ -130,7 +117,7 @@ fmt: fmt_proto fmt_shell ## go fmt
 
 .PHONY: fmt_proto fmt_shell
 fmt_proto: ## go fmt protobuf file
-	#@find . -name '*.proto' -not -path "./vendor/*" | xargs clang-format -i
+	@find . -name '*.proto' -not -path "./vendor/*" | xargs clang-format -i
 
 fmt_shell: ## check shell file
 	find . -name '*.sh' -not -path "./vendor/*" | xargs shfmt -w -s -i 4 -ci -bn
@@ -139,7 +126,7 @@ bench: ## Run benchmark of all
 	@go test ./... -v -bench=.
 
 msan: ## Run memory sanitizer
-	@go test -msan -short $(PKG_LIST)
+	@go test -msan -short $(go list ./... | grep -v "mocks")
 
 coverage: ## Generate global code coverage report
 	@./build/tools/coverage.sh
@@ -154,7 +141,7 @@ docker-compose: ## build docker-compose for chain33 run
 	@cd build && if ! [ -d ci ]; then \
 	 make -C ../ ; \
 	 fi; \
-	 cp chain33* Dockerfile  docker-compose* ci/ && cd ci/ && ./docker-compose-pre.sh run $(PROJ) $(DAPP)  && cd ../..
+	 cp chain33* Dockerfile  docker-compose* system-test* ci/ && cd ci/ && ./docker-compose-pre.sh run $(PROJ) $(DAPP)  && cd ../..
 
 docker-compose-down: ## build docker-compose for chain33 run
 	@cd build && if [ -d ci ]; then \
@@ -180,7 +167,7 @@ proto:protobuf
 
 protobuf: ## Generate protbuf file of types package
 	@cd types/proto && ./create_protobuf.sh && cd ../..
-	@find ./system/dapp -maxdepth 2 -type d  -name proto -exec make -C {} \;
+	@find ./system/dapp ./system/store/mavl -maxdepth 2 -type d  -name proto -exec make -C {} \;
 
 depends: ## Generate depends file of types package
 	@find ./system/dapp -maxdepth 2 -type d  -name cmd -exec make -C {} OUT="$(MKDIR)build/ci" FLAG= \;
@@ -189,7 +176,7 @@ help: ## Display this help screen
 	@printf "Help doc:\nUsage: make [command]\n"
 	@printf "[command]\n"
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
-	
+
 cleandata:
 	rm -rf build/datadir/addrbook
 	rm -rf build/datadir/blockchain.db
@@ -216,11 +203,15 @@ checkgofmt: ## get all go files and run go fmt on them
 
 .PHONY: mock
 mock:
+	@cd blockchain/ && mockery -name=CommonStore && mv mocks/CommonStore.go mocks/commonstore.go && cd -
+	@cd blockchain/ && mockery -name=SequenceStore && mv mocks/SequenceStore.go mocks/sequence_store.go && cd -
+	@cd blockchain/ && mockery -name=PushWorkNotify && mv mocks/PushWorkNotify.go mocks/pushwork_notify.go && cd -
 	@cd client && mockery -name=QueueProtocolAPI && mv mocks/QueueProtocolAPI.go mocks/api.go && cd -
-	@cd queue && mockery -name=Client && mv mocks/Client.go mocks/client.go && cd -
 	@cd common/db && mockery -name=KV && mv mocks/KV.go mocks/kv.go && cd -
 	@cd common/db && mockery -name=KVDB && mv mocks/KVDB.go mocks/kvdb.go && cd -
+	@cd queue && mockery -name=Client && mv mocks/Client.go mocks/client.go && cd -
 	@cd types/ && mockery -name=Chain33Client && mv mocks/Chain33Client.go mocks/chain33client.go && cd -
+
 
 
 .PHONY: auto_ci_before auto_ci_after auto_ci
@@ -282,6 +273,7 @@ sync:
 	git fetch upstream
 	git checkout master
 	git merge upstream/master
+	git push origin master
 
 branch:
 	make sync
@@ -304,7 +296,7 @@ pull:
 	git fetch ${name}
 	git checkout ${name}/${b}
 	git checkout -b ${name}-${b}
- pullsync:
+pullsync:
 	git fetch ${name}
 	git checkout ${name}-${b}
 	git merge ${name}/${b}
@@ -313,7 +305,7 @@ pullpush:
 	git commit -a -m "${m}" ; \
 	fi;
 	make pullsync
-	git push ${name} ${name}-${b}:${b}'
+	git push ${name} ${name}-${b}:${b}
 
 webhook:
 	git checkout ${b}

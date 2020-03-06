@@ -16,7 +16,7 @@ func init() {
 }
 
 type txindexPlugin struct {
-	*pluginBase
+	pluginBase
 }
 
 func (p *txindexPlugin) CheckEnable(executor *executor, enable bool) (kvs []*types.KeyValue, ok bool, err error) {
@@ -49,6 +49,8 @@ func (p *txindexPlugin) ExecDelLocal(executor *executor, data *types.BlockDetail
 
 //获取公共的信息
 func getTx(executor *executor, tx *types.Transaction, receipt *types.ReceiptData, index int) []*types.KeyValue {
+	types.AssertConfig(executor.api)
+	cfg := executor.api.GetConfig()
 	txhash := tx.Hash()
 	//构造txresult 信息保存到db中
 	var txresult types.TxResult
@@ -59,8 +61,8 @@ func getTx(executor *executor, tx *types.Transaction, receipt *types.ReceiptData
 	txresult.Blocktime = executor.blocktime
 	txresult.ActionName = tx.ActionName()
 	var kvlist []*types.KeyValue
-	kvlist = append(kvlist, &types.KeyValue{Key: types.CalcTxKey(txhash), Value: types.Encode(&txresult)})
-	if types.IsEnable("quickIndex") {
+	kvlist = append(kvlist, &types.KeyValue{Key: cfg.CalcTxKey(txhash), Value: cfg.CalcTxKeyValue(&txresult)})
+	if cfg.IsEnable("quickIndex") {
 		kvlist = append(kvlist, &types.KeyValue{Key: types.CalcTxShortKey(txhash), Value: []byte("1")})
 	}
 	return kvlist
@@ -83,7 +85,11 @@ func getTxIndex(executor *executor, tx *types.Transaction, receipt *types.Receip
 	ety := types.LoadExecutorType(string(tx.Execer))
 	// none exec has not execType
 	if ety != nil {
-		txinf.Assets, _ = ety.GetAssets(tx)
+		var err error
+		txinf.Assets, err = ety.GetAssets(tx)
+		if err != nil {
+			elog.Error("getTxIndex ", "GetAssets err", err)
+		}
 	}
 
 	txIndexInfo.index = &txinf

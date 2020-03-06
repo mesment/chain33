@@ -6,125 +6,131 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+
+	"github.com/spf13/cobra"
 
 	"github.com/33cn/chain33/common/address"
 )
 
-func OneStepSend(args []string) {
-	name := args[0]
-	params := args[2:]
-	if len(params) < 1 {
-		loadHelp()
-		return
+func OneStepSendCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:                "send",
+		Short:              "send tx in one step",
+		DisableFlagParsing: true,
+		Run: func(cmd *cobra.Command, args []string) {
+			oneStepSend(cmd, os.Args[0], args)
+		},
 	}
-
-	if params[0] == "help" || params[0] == "--help" || params[0] == "-h" {
-		loadHelp()
-		return
-	}
-	hasKey := false
-	var key string
-	size := len(params)
-	for i, v := range params {
-		if v == "-k" {
-			hasKey = true
-			if i < size-1 {
-				key = params[i+1]
-				params = append(params[:i], params[i+2:]...)
-			} else {
-				fmt.Fprintln(os.Stderr, "no private key found")
-				return
-			}
-		}
-	}
-	hasAddr := false
-	var rpcAddr string
-	size = len(params)
-	for i, v := range params {
-		if v == "--rpc_laddr" {
-			hasAddr = true
-			if i < size-1 {
-				rpcAddr = params[i+1]
-				params = append(params[:i], params[i+2:]...)
-			}
-		}
-	}
-	var isAddr bool
-	err := address.CheckAddress(key)
-	if err != nil {
-		isAddr = false
-	} else {
-		isAddr = true
-	}
-
-	cmdCreate := exec.Command(name, params...)
-	var outCreate bytes.Buffer
-	var errCreate bytes.Buffer
-	cmdCreate.Stdout = &outCreate
-	cmdCreate.Stderr = &errCreate
-	err = cmdCreate.Run()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-	}
-	if errCreate.String() != "" {
-		fmt.Println(errCreate.String())
-		return
-	}
-
-	if !hasKey || key == "" {
-		fmt.Fprintln(os.Stderr, "no private key found")
-		return
-	}
-	bufCreate := outCreate.Bytes()
-	addrOrKey := "-k"
-	if isAddr {
-		addrOrKey = "-a"
-	}
-	cParams := []string{"wallet", "sign", "-d", string(bufCreate[:len(bufCreate)-1]), addrOrKey, key}
-	if hasAddr {
-		cParams = append(cParams, "--rpc_laddr", rpcAddr)
-	}
-	cmdSign := exec.Command(name, cParams...)
-	var outSign bytes.Buffer
-	var errSign bytes.Buffer
-	cmdSign.Stdout = &outSign
-	cmdSign.Stderr = &errSign
-	err = cmdSign.Run()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-	}
-	if errSign.String() != "" {
-		fmt.Println(errSign.String())
-		return
-	}
-	//fmt.Println("signedTx", outSign.String(), errSign.String())
-
-	bufSign := outSign.Bytes()
-	cParams = []string{"wallet", "send", "-d", string(bufSign[:len(bufSign)-1])}
-	if hasAddr {
-		cParams = append(cParams, "--rpc_laddr", rpcAddr)
-	}
-	cmdSend := exec.Command(name, cParams...)
-	var outSend bytes.Buffer
-	var errSend bytes.Buffer
-	cmdSend.Stdout = &outSend
-	cmdSend.Stderr = &errSend
-	err = cmdSend.Run()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-	}
-	if errSend.String() != "" {
-		fmt.Println(errSend.String())
-		return
-	}
-	bufSend := outSend.Bytes()
-	fmt.Println(string(bufSend[:len(bufSend)-1]))
+	cmd.Flags().StringP("key", "k", "", "private key or from address for sign tx")
+	//cmd.MarkFlagRequired("key")
+	return cmd
 }
 
-func loadHelp() {
-	fmt.Println("Use similarly as bty/token/trade/bind_miner raw transaction creation, in addition to the parameter of private key or from address input following \"-k\".")
-	fmt.Println("e.g.: cli send bty transfer -a 1 -n note -t toAddr -k privKey/fromAddr")
+// one step send
+func oneStepSend(cmd *cobra.Command, cmdName string, params []string) {
+	if len(params) < 1 || params[0] == "help" || params[0] == "--help" || params[0] == "-h" {
+		loadSendHelp()
+		return
+	}
+
+	var createParams, keyParams []string
+	//取出send命令的key参数, 保留原始构建的参数列表
+	for i, v := range params {
+		if strings.HasPrefix(v, "-k=") || strings.HasPrefix(v, "--key=") {
+			keyParams = append(keyParams, v)
+			createParams = append(params[:i], params[i+1:]...)
+			break
+		} else if (v == "-k" || v == "--key") && i < len(params)-1 {
+			keyParams = append(keyParams, v, params[i+1])
+			createParams = append(params[:i], params[i+2:]...)
+			break
+		}
+	}
+	//调用send命令parse函数解析key参数
+	err := cmd.Flags().Parse(keyParams)
+	key, _ := cmd.Flags().GetString("key")
+	if len(key) < 32 || err != nil {
+		loadSendHelp()
+		fmt.Fprintln(os.Stderr, "Error: required flag(s) \"key\" not proper set")
+		return
+	}
+
+	//构造签名命令的key参数
+	if address.CheckAddress(key) == nil {
+		keyParams = append([]string{}, "-a", key)
+	} else {
+		keyParams = append([]string{}, "-k", key)
+	}
+	//创建交易命令
+	cmdCreate := exec.Command(cmdName, createParams...)
+	createRes, err := execCmd(cmdCreate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	//cli不传任何参数不会报错, 输出帮助信息
+	if strings.Contains(createRes, "\n") {
+		fmt.Println(createRes)
+		return
+	}
+	//采用内部的构造交易命令,解析rpc_laddr地址参数
+	createCmd, createFlags, _ := cmd.Root().Traverse(createParams)
+	_ = createCmd.ParseFlags(createFlags)
+	rpcAddr, _ := createCmd.Flags().GetString("rpc_laddr")
+	//交易签名命令调用
+	signParams := []string{"wallet", "sign", "-d", createRes, "--rpc_laddr", rpcAddr}
+	cmdSign := exec.Command(cmdName, append(signParams, keyParams...)...)
+	signRes, err := execCmd(cmdSign)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	//交易发送命令调用
+	sendParams := []string{"wallet", "send", "-d", signRes, "--rpc_laddr", rpcAddr}
+	cmdSend := exec.Command(cmdName, sendParams...)
+	sendRes, err := execCmd(cmdSend)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	fmt.Println(sendRes)
+}
+
+func execCmd(c *exec.Cmd) (string, error) {
+	var outBuf, errBuf bytes.Buffer
+	c.Stderr = &errBuf
+	c.Stdout = &outBuf
+
+	if err := c.Run(); err != nil {
+		return "", errors.New(err.Error() + "\n" + errBuf.String())
+	}
+	if len(errBuf.String()) > 0 {
+		return "", errors.New(errBuf.String())
+	}
+	outBytes := outBuf.Bytes()
+	return string(outBytes[:len(outBytes)-1]), nil
+}
+
+func loadSendHelp() {
+	help := `[Integrate create/sign/send transaction operations in one command]
+Usage:
+  -cli send [flags]
+
+Examples:
+cli send coins transfer -a 1 -n note -t toAddr -k [privateKey | fromAddr]
+
+equivalent to three steps: 
+1. cli coins transfer -a 1 -n note -t toAddr   //create raw tx
+2. cli wallet sign -d rawTx -k privateKey      //sign raw tx
+3. cli wallet send -d signTx                   //send tx to block chain
+
+Flags:
+  -h, --help         help for send
+  -k, --key			 private key or from address for sign tx, required`
+	fmt.Println(help)
 }

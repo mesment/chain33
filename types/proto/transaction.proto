@@ -14,7 +14,7 @@ message AssetsGenesis {
 message AssetsTransferToExec {
     string cointoken = 1;
     int64  amount    = 2;
-    string note      = 3;
+    bytes  note      = 3;
     string execName  = 4;
     string to        = 5;
 }
@@ -22,7 +22,7 @@ message AssetsTransferToExec {
 message AssetsWithdraw {
     string cointoken = 1;
     int64  amount    = 2;
-    string note      = 3;
+    bytes  note      = 3;
     string execName  = 4;
     string to        = 5;
 }
@@ -30,7 +30,7 @@ message AssetsWithdraw {
 message AssetsTransfer {
     string cointoken = 1;
     int64  amount    = 2;
-    string note      = 3;
+    bytes  note      = 3;
     string to        = 4;
 }
 
@@ -44,11 +44,21 @@ message CreateTx {
     string to          = 1;
     int64  amount      = 2;
     int64  fee         = 3;
-    string note        = 4;
+    bytes  note        = 4;
     bool   isWithdraw  = 5;
     bool   isToken     = 6;
     string tokenSymbol = 7;
     string execName    = 8;
+    string execer      = 9;
+}
+
+message ReWriteRawTx {
+    string tx = 1;
+    // bytes  execer = 2;
+    string to     = 3;
+    string expire = 4;
+    int64  fee    = 5;
+    int32  index  = 6;
 }
 
 message CreateTransactionGroup {
@@ -59,19 +69,20 @@ message UnsignTx {
     bytes data = 1;
 }
 
+// 支持构造多笔nobalance的交易 payAddr 可以支持 1. 地址 2. 私钥
+message NoBalanceTxs {
+    repeated string txHexs  = 1;
+    string          payAddr = 2;
+    string          privkey = 3;
+    string          expire  = 4;
+}
+
 // payAddr 可以支持 1. 地址 2. 私钥
 message NoBalanceTx {
     string txHex   = 1;
     string payAddr = 2;
     string privkey = 3;
     string expire  = 4;
-}
-
-message SignedTx {
-    bytes unsign = 1;
-    bytes sign   = 2;
-    bytes pubkey = 3;
-    int32 ty     = 4;
 }
 
 message Transaction {
@@ -137,12 +148,6 @@ message ReqAddr {
     int64 index     = 6;
 }
 
-message ReqPrivacy {
-    int32 count     = 1;
-    int32 direction = 2;
-    int64 height    = 3;
-}
-
 message HexTx {
     string tx = 1;
 }
@@ -160,6 +165,19 @@ message ReqTxList {
 
 message ReplyTxList {
     repeated Transaction txs = 1;
+}
+
+message ReqGetMempool {
+    bool isAll = 1;
+}
+
+message ReqProperFee {
+    int32 txCount = 1;
+    int32 txSize  = 2;
+}
+
+message ReplyProperFee {
+    int64 properFee = 1;
 }
 
 message TxHashList {
@@ -211,6 +229,8 @@ message TransactionDetail {
     string         fromaddr   = 8;
     string         actionName = 9;
     repeated Asset assets     = 10;
+    repeated TxProof txProofs = 11;
+    bytes            fullHash = 12;
 }
 
 message TransactionDetails {
@@ -231,7 +251,20 @@ message UserWrite {
 }
 
 message UpgradeMeta {
-    bool   indexing = 1;
+    bool   starting = 1;
     string version  = 2;
     int64  height   = 3;
+}
+
+//通过交易hash获取交易列表，需要区分是短hash还是全hash值
+message ReqTxHashList {
+    repeated string hashes      = 1;
+    bool            isShortHash = 2;
+}
+
+//使用多层merkle树之后的proof证明结构体
+message TxProof {
+    repeated bytes proofs   = 1;
+    uint32         index    = 2;
+    bytes          rootHash = 3;
 }

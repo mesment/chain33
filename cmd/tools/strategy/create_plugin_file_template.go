@@ -6,9 +6,10 @@
 
 package strategy
 
+//const
 const (
 	// 創建main.go的文件模板
-	CPFT_MAIN_GO = `package main
+	CpftMainGo = `package main
 
 import (
 	_ "github.com/33cn/chain33/system"
@@ -25,7 +26,7 @@ func main() {
 `
 
 	// 生成的配置文件模板 xxx.toml
-	CPFT_CFG_TOML = `
+	CpftCfgToml = `
 Title="${PROJECTNAME}"
 FixTime=false
 
@@ -101,14 +102,14 @@ enableMVCC=false
 saveTokenTxList=false
 `
 
-	CPFT_RUNMAIN_BLOCK = `package main
+	CpftRunmainBlock = `package main
 
 var ${PROJECTNAME} = `
 
 	// 生成项目运行主程序的模板 xxx.go
 	// 顶部还需要加上package main
 	//var bityuan = `CPFT_RUNMAIN`
-	CPFT_RUNMAIN = `TestNet=false
+	CpftRunMain = `TestNet=false
 [blockchain]
 defCacheSize=128
 maxFetchBlockNum=128
@@ -124,7 +125,7 @@ msgCacheSize=10240
 driver="leveldb"
 [mempool]
 poolCacheSize=102400
-minTxFee=100000
+minTxFeeRate=100000
 [consensus]
 name="ticket"
 minerstart=true
@@ -194,8 +195,7 @@ minFee=100000
 driver="leveldb"
 signType="secp256k1"
 [exec]
-isFree=false
-minExecFee=100000
+
 [exec.sub.token]
 #配置一个空值，防止配置文件被覆盖
 tokenApprs = []
@@ -219,9 +219,13 @@ ForkResetTx0= 200000
 ForkWithdraw= 200000
 ForkExecRollback= 450000
 ForkCheckBlockTime=1200000
+ForkMultiSignAddress=1298600
 ForkTxHeight= -1
 ForkTxGroupPara= -1
 ForkChainParamV2= -1
+ForkBase58AddressCheck=1800000
+ForkTicketFundAddrV1=-1
+ForkRootHash=1
 [fork.sub.coins]
 Enable=0
 [fork.sub.ticket]
@@ -247,7 +251,7 @@ ForkTradeAsset= -1
 `
 
 	// 生成项目Makefile文件的模板 Makefile
-	CPFT_MAKEFILE = `
+	CpftMakefile = `
 CHAIN33=github.com/33cn/chain33
 CHAIN33_PATH=vendor/${CHAIN33}
 all: vendor proto build
@@ -293,10 +297,11 @@ clean:
 	@rm -rf plugin/dapp/init
 	@rm -rf plugin/crypto/init
 	@rm -rf plugin/store/init
+	@rm -rf plugin/mempool/init
 `
 
 	// 生成 .travis.yml 文件模板
-	CPFT_TRAVIS_YML = `
+	CpftTravisYml = `
 language: go
 
 go:
@@ -305,8 +310,8 @@ go:
 `
 
 	// 生成 plugin/plugin.toml的文件模板
-	CPFT_PLUGIN_TOML = `
-# type字段仅支持 consensus  dapp store
+	CpftPluginToml = `
+# type字段仅支持 consensus  dapp store mempool
 [dapp-ticket]
 gitrepo = "github.com/33cn/plugin/plugin/dapp/ticket"
 
@@ -324,9 +329,15 @@ gitrepo = "github.com/33cn/plugin/plugin/dapp/token"
 
 [dapp-trade]
 gitrepo = "github.com/33cn/plugin/plugin/dapp/trade"
+
+[mempool-price]
+gitrepo = "github.com/33cn/plugin/plugin/mempool/price"
+
+[mempool-score]
+gitrepo = "github.com/33cn/plugin/plugin/mempool/score"
 `
 	// 项目 cli/main.go 文件模板
-	CPFT_CLI_MAIN = `package main
+	CpftCliMain = `package main
 
 import (
 	_ "${PROJECTPATH}/plugin"
@@ -339,7 +350,7 @@ func main() {
 }
 `
 	// plugin/dapp/xxxx/commands/cmd.go文件的模板c
-	CPFT_DAPP_COMMANDS = `package commands
+	CpftDappCommands = `package commands
 
 import (
 	"github.com/spf13/cobra"
@@ -350,7 +361,7 @@ func Cmd() *cobra.Command {
 }`
 
 	// plugin/dapp/xxxx/plugin.go文件的模板
-	CPFT_DAPP_PLUGIN = `package ${PROJECTNAME}
+	CpftDappPlugin = `package ${PROJECTNAME}
 
 import (
 	"github.com/33cn/chain33/pluginmgr"
@@ -371,12 +382,12 @@ func init() {
 `
 
 	// plugin/dapp/xxxx/executor/xxxx.go文件模板
-	CPFT_DAPP_EXEC = `package executor
+	CpftDappExec = `package executor
 
 import (
 	log "github.com/inconshreveable/log15"
-	drivers "gitlab.33.cn/chain33/chain33/system/dapp"
-	"gitlab.33.cn/chain33/chain33/types"
+	drivers "github.com/33cn/chain33/system/dapp"
+	"github.com/33cn/chain33/types"
 )
 
 var clog = log.New("module", "execs.${EXECNAME}")
@@ -424,17 +435,17 @@ func (this *${CLASSNAME}) CheckTx(tx *types.Transaction, index int) error {
 }
 `
 	// plugin/dapp/xxxx/proto/create_protobuf.sh文件模板
-	CPFT_DAPP_CREATEPB = `#!/bin/sh
+	CpftDappCreatepb = `#!/bin/sh
 protoc --go_out=plugins=grpc:../types ./*.proto --proto_path=. 
 `
 
 	// plugin/dapp/xxxx/proto/Makefile 文件模板
-	CPFT_DAPP_MAKEFILE = `all:
+	CpftDappMakefile = `all:
 	sh ./create_protobuf.sh
 `
 
 	// plugin/dapp/xxxx/proto/xxxx.proto的文件模板
-	CPFT_DAPP_PROTO = `syntax = "proto3";
+	CpftDappProto = `syntax = "proto3";
 package types;
 
 message ${ACTIONNAME} {
@@ -449,10 +460,10 @@ message ${ACTIONNAME}None {
 `
 
 	// plugin/dapp/xxxx/types/types.go的文件模板cd
-	CPFT_DAPP_TYPEFILE = `package types
+	CpftDappTypefile = `package types
 
 import (
-	"gitlab.33.cn/chain33/chain33/types"
+	"github.com/33cn/chain33/types"
 )
 
 var (

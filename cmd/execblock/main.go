@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// package main 主要是执行已经同步好的区块链的某个区块
 package main
 
-//这个软件包的主要目的是执行已经同步好的区块链的某个区块
 import (
 	"flag"
 	"fmt"
@@ -43,18 +43,21 @@ func resetDatadir(cfg *types.Config, datadir string) {
 }
 
 func initEnv() (queue.Queue, queue.Module, queue.Module) {
-	var q = queue.New("channel")
-	cfg, sub := types.InitCfg(*configPath)
+	cfg := types.NewChain33Config(types.ReadFile(*configPath))
+	mcfg := cfg.GetModuleConfig()
 	if *datadir != "" {
-		resetDatadir(cfg, *datadir)
+		resetDatadir(mcfg, *datadir)
 	}
-	cfg.Consensus.Minerstart = false
-	chain := blockchain.New(cfg.BlockChain)
+	mcfg.Consensus.Minerstart = false
+
+	var q = queue.New("channel")
+	q.SetConfig(cfg)
+	chain := blockchain.New(cfg)
 	chain.SetQueueClient(q.Client())
-	exec := executor.New(cfg.Exec, sub.Exec)
+	exec := executor.New(cfg)
 	exec.SetQueueClient(q.Client())
-	types.SetMinFee(0)
-	s := store.New(cfg.Store, sub.Store)
+	cfg.SetMinFee(0)
+	s := store.New(cfg)
 	s.SetQueueClient(q.Client())
 	return q, chain, s
 }
@@ -78,7 +81,10 @@ func main() {
 	log.Info("execblock", "block height", *height)
 	prevState := blocks.Items[0].Block.StateHash
 	block := blocks.Items[1].Block
-	receipt := util.ExecTx(q.Client(), prevState, block)
+	receipt, err := util.ExecTx(q.Client(), prevState, block)
+	if err != nil {
+		panic(err)
+	}
 	for i, r := range receipt.GetReceipts() {
 		println("=======================")
 		println("tx index ", i)

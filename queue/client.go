@@ -27,30 +27,35 @@ import (
 
 var gid int64
 
+// Client 消息队列的接口，每个模块都需要一个发送接受client
 type Client interface {
-	Send(msg Message, waitReply bool) (err error) //同步发送消息
-	SendTimeout(msg Message, waitReply bool, timeout time.Duration) (err error)
-	Wait(msg Message) (Message, error)                               //等待消息处理完成
-	WaitTimeout(msg Message, timeout time.Duration) (Message, error) //等待消息处理完成
-	Recv() chan Message
+	Send(msg *Message, waitReply bool) (err error) //同步发送消息
+	SendTimeout(msg *Message, waitReply bool, timeout time.Duration) (err error)
+	Wait(msg *Message) (*Message, error)                               //等待消息处理完成
+	WaitTimeout(msg *Message, timeout time.Duration) (*Message, error) //等待消息处理完成
+	Recv() chan *Message
+	Reply(msg *Message)
 	Sub(topic string) //订阅消息
 	Close()
 	CloseQueue() (*types.Reply, error)
-	NewMessage(topic string, ty int64, data interface{}) (msg Message)
+	NewMessage(topic string, ty int64, data interface{}) (msg *Message)
+	GetConfig() *types.Chain33Config
 }
 
-/// Module be used for module interface
+// Module be used for module interface
 type Module interface {
 	SetQueueClient(client Client)
+	//wait for ready
+	Wait()
 	Close()
 }
 
 type client struct {
 	q          *queue
-	recv       chan Message
+	recv       chan *Message
 	done       chan struct{}
 	wg         *sync.WaitGroup
-	topic      string
+	topic      unsafe.Pointer
 	isClosed   int32
 	isCloseing int32
 }
@@ -58,29 +63,38 @@ type client struct {
 func newClient(q *queue) Client {
 	client := &client{}
 	client.q = q
-	client.recv = make(chan Message, 5)
+	client.recv = make(chan *Message, 5)
 	client.done = make(chan struct{}, 1)
 	client.wg = &sync.WaitGroup{}
 	return client
 }
 
+// GetConfig return the queue Chain33Config
+func (client *client) GetConfig() *types.Chain33Config {
+	types.AssertConfig(client.q)
+	cfg := client.q.GetConfig()
+	if cfg == nil {
+		panic("Chain33Config is nil")
+	}
+	return cfg
+}
+
+// Send 发送消息,msg 消息 ,waitReply 是否等待回应
 //1. 系统保证send出去的消息就是成功了，除非系统崩溃
 //2. 系统保证每个消息都有对应的 response 消息
-func (client *client) Send(msg Message, waitReply bool) (err error) {
-	timeout := 10 * time.Minute
-	if types.IsTestNet() {
-		timeout = time.Minute
-	}
+func (client *client) Send(msg *Message, waitReply bool) (err error) {
+	timeout := time.Duration(-1)
 	err = client.SendTimeout(msg, waitReply, timeout)
-	if err == types.ErrTimeout {
+	if err == ErrQueueTimeout {
 		panic(err)
 	}
 	return err
 }
 
-func (client *client) SendTimeout(msg Message, waitReply bool, timeout time.Duration) (err error) {
+// SendTimeout 超时发送， msg 消息 ,waitReply 是否等待回应， timeout 超时时间
+func (client *client) SendTimeout(msg *Message, waitReply bool, timeout time.Duration) (err error) {
 	if client.isClose() {
-		return types.ErrIsClosed
+		return ErrIsQueueClosed
 	}
 	if !waitReply {
 		msg.chReply = nil
@@ -93,51 +107,66 @@ func (client *client) SendTimeout(msg Message, waitReply bool, timeout time.Dura
 //1. SendAsyn 低优先级
 //2. Send 高优先级别的发送消息
 
-func (client *client) NewMessage(topic string, ty int64, data interface{}) (msg Message) {
+// NewMessage 新建消息 topic模块名称 ty消息类型 data 数据
+func (client *client) NewMessage(topic string, ty int64, data interface{}) (msg *Message) {
 	id := atomic.AddInt64(&gid, 1)
 	return NewMessage(id, topic, ty, data)
 }
 
-func (client *client) WaitTimeout(msg Message, timeout time.Duration) (Message, error) {
-	if msg.chReply == nil {
-		return Message{}, errors.New("empty wait channel")
+func (client *client) Reply(msg *Message) {
+	if msg.chReply != nil {
+		msg.Reply(msg)
+		return
 	}
-	t := time.NewTimer(timeout)
-	defer t.Stop()
+	if msg.callback != nil {
+		client.q.callback <- msg
+	}
+}
+
+// WaitTimeout 等待时间 msg 消息 timeout 超时时间
+func (client *client) WaitTimeout(msg *Message, timeout time.Duration) (*Message, error) {
+	if msg.chReply == nil {
+		return &Message{}, errors.New("empty wait channel")
+	}
+
+	var t <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		t = timer.C
+	}
 	select {
 	case msg = <-msg.chReply:
 		return msg, msg.Err()
 	case <-client.done:
-		return Message{}, errors.New("client is closed")
-	case <-t.C:
-		return Message{}, types.ErrTimeout
+		return &Message{}, ErrIsQueueClosed
+	case <-t:
+		return &Message{}, ErrQueueTimeout
 	}
 }
 
-func (client *client) Wait(msg Message) (Message, error) {
-	timeout := 10 * time.Minute
-	if types.IsTestNet() {
-		timeout = 5 * time.Minute
-	}
+// Wait 等待时间
+func (client *client) Wait(msg *Message) (*Message, error) {
+	timeout := time.Duration(-1)
 	msg, err := client.WaitTimeout(msg, timeout)
-	if err == types.ErrTimeout {
+	if err == ErrQueueTimeout {
 		panic(err)
 	}
 	return msg, err
 }
 
-func (client *client) Recv() chan Message {
+// Recv 获取接受消息通道
+func (client *client) Recv() chan *Message {
 	return client.recv
 }
 
 func (client *client) getTopic() string {
-	address := unsafe.Pointer(&(client.topic))
-	return *(*string)(atomic.LoadPointer(&address))
+	return *(*string)(atomic.LoadPointer(&client.topic))
 }
 
 func (client *client) setTopic(topic string) {
-	address := unsafe.Pointer(&(client.topic))
-	atomic.StorePointer(&address, unsafe.Pointer(&topic))
+	// #nosec
+	atomic.StorePointer(&client.topic, unsafe.Pointer(&topic))
 }
 
 func (client *client) isClose() bool {
@@ -148,8 +177,9 @@ func (client *client) isInClose() bool {
 	return atomic.LoadInt32(&client.isCloseing) == 1
 }
 
+// Close 关闭client
 func (client *client) Close() {
-	if atomic.LoadInt32(&client.isClosed) == 1 {
+	if atomic.LoadInt32(&client.isClosed) == 1 || atomic.LoadPointer(&client.topic) == nil {
 		return
 	}
 	topic := client.getTopic()
@@ -159,32 +189,37 @@ func (client *client) Close() {
 	client.wg.Wait()
 	atomic.StoreInt32(&client.isClosed, 1)
 	close(client.Recv())
+	for msg := range client.Recv() {
+		msg.Reply(client.NewMessage(msg.Topic, msg.Ty, types.ErrChannelClosed))
+	}
 }
 
+// CloseQueue 关闭消息队列
 func (client *client) CloseQueue() (*types.Reply, error) {
 	//	client.q.Close()
 	if client.q.isClosed() {
 		return &types.Reply{IsOk: true}, nil
 	}
 	qlog.Debug("queue", "msg", "closing chain33")
-	client.q.interupt <- struct{}{}
+	client.q.interrupt <- struct{}{}
 	//	close(client.q.interupt)
 	return &types.Reply{IsOk: true}, nil
 }
 
-func (client *client) isEnd(data Message, ok bool) bool {
+func (client *client) isEnd(data *Message, ok bool) bool {
 	if !ok {
+		return true
+	}
+	if data.Data == nil && data.ID == 0 && data.Ty == 0 {
 		return true
 	}
 	if atomic.LoadInt32(&client.isClosed) == 1 {
 		return true
 	}
-	if data.Data == nil && data.Id == 0 && data.Ty == 0 {
-		return true
-	}
 	return false
 }
 
+// Sub 订阅消息类型
 func (client *client) Sub(topic string) {
 	//正在关闭或者已经关闭
 	if client.isInClose() || client.isClose() {

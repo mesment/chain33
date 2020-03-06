@@ -4,6 +4,7 @@
 
 // +build go1.8
 
+// Package main chain33程序入口
 package main
 
 import (
@@ -12,5 +13,5 @@ import (
 )
 
 func main() {
-	cli.RunChain33("")
+	cli.RunChain33("", "")
 }

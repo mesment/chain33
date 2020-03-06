@@ -11,8 +11,7 @@ func init() {
 }
 
 type feePlugin struct {
-	*pluginBase
-	fee types.TotalFee
+	pluginBase
 }
 
 func (p *feePlugin) CheckEnable(executor *executor, enable bool) (kvs []*types.KeyValue, ok bool, err error) {
@@ -20,13 +19,13 @@ func (p *feePlugin) CheckEnable(executor *executor, enable bool) (kvs []*types.K
 }
 
 func (p *feePlugin) ExecLocal(executor *executor, data *types.BlockDetail) ([]*types.KeyValue, error) {
-	p.fee = types.TotalFee{}
+	fee := &types.TotalFee{}
 	for i := 0; i < len(data.Block.Txs); i++ {
 		tx := data.Block.Txs[i]
-		p.fee.Fee += tx.Fee
-		p.fee.TxCount++
+		fee.Fee += tx.Fee
+		fee.TxCount++
 	}
-	kv, err := saveFee(executor, &p.fee, data.Block.ParentHash, data.Block.Hash())
+	kv, err := saveFee(executor, fee, data.Block.ParentHash, data.Block.Hash(executor.api.GetConfig()))
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +33,7 @@ func (p *feePlugin) ExecLocal(executor *executor, data *types.BlockDetail) ([]*t
 }
 
 func (p *feePlugin) ExecDelLocal(executor *executor, data *types.BlockDetail) ([]*types.KeyValue, error) {
-	kv, err := delFee(executor, data.Block.Hash())
+	kv, err := delFee(executor, data.Block.Hash(executor.api.GetConfig()))
 	if err != nil {
 		return nil, err
 	}

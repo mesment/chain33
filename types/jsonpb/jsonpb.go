@@ -54,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/33cn/chain33/common"
 	"github.com/golang/protobuf/proto"
@@ -71,6 +72,9 @@ type Marshaler struct {
 
 	// Whether to render fields with zero values.
 	EmitDefaults bool
+
+	//Enable utf8 bytes to string
+	EnableUTF8BytesToString bool
 
 	// A string to indent each level by. The presence of this field will
 	// also cause a space to appear between the field separator and
@@ -91,12 +95,12 @@ type Marshaler struct {
 // AnyResolver takes a type URL, present in an Any message, and resolves it into
 // an instance of the associated message.
 type AnyResolver interface {
-	Resolve(typeUrl string) (proto.Message, error)
+	Resolve(typeURL string) (proto.Message, error)
 }
 
-func defaultResolveAny(typeUrl string) (proto.Message, error) {
+func defaultResolveAny(typeURL string) (proto.Message, error) {
 	// Only the part of typeUrl after the last slash is relevant.
-	mname := typeUrl
+	mname := typeURL
 	if slash := strings.LastIndex(mname, "/"); slash >= 0 {
 		mname = mname[slash+1:]
 	}
@@ -107,25 +111,25 @@ func defaultResolveAny(typeUrl string) (proto.Message, error) {
 	return reflect.New(mt.Elem()).Interface().(proto.Message), nil
 }
 
-// JSONPBMarshaler is implemented by protobuf messages that customize the
+// JSONPBmarshaler is implemented by protobuf messages that customize the
 // way they are marshaled to JSON. Messages that implement this should
 // also implement JSONPBUnmarshaler so that the custom format can be
 // parsed.
 //
 // The JSON marshaling must follow the proto to JSON specification:
 //	https://developers.google.com/protocol-buffers/docs/proto3#json
-type JSONPBMarshaler interface {
+type JSONPBmarshaler interface {
 	MarshalJSONPB(*Marshaler) ([]byte, error)
 }
 
-// JSONPBUnmarshaler is implemented by protobuf messages that customize
+// JSONPBunmarshaler is implemented by protobuf messages that customize
 // the way they are unmarshaled from JSON. Messages that implement this
 // should also implement JSONPBMarshaler so that the custom format can be
 // produced.
 //
 // The JSON unmarshaling must follow the JSON to proto specification:
 //	https://developers.google.com/protocol-buffers/docs/proto3#json
-type JSONPBUnmarshaler interface {
+type JSONPBunmarshaler interface {
 	UnmarshalJSONPB(*Unmarshaler, []byte) error
 }
 
@@ -171,7 +175,7 @@ type wkt interface {
 
 // marshalObject writes a struct to the Writer.
 func (m *Marshaler) marshalObject(out *errWriter, v proto.Message, indent, typeURL string) error {
-	if jsm, ok := v.(JSONPBMarshaler); ok {
+	if jsm, ok := v.(JSONPBmarshaler); ok {
 		b, err := jsm.MarshalJSONPB(m)
 		if err != nil {
 			return err
@@ -521,15 +525,30 @@ func (m *Marshaler) marshalValue(out *errWriter, prop *proto.Properties, v refle
 		return out.err
 	}
 
-	//[]byte
+	//[]byte 写bytes 的情况，默认情况下，转化成 hex
+	//为什么不用base64:
+	//1. 我们的数据都经过压缩(base64带来的字节数的减少有限)
+	//2. hex 是一种最容易解析的格式
+	//3. 我们的hash 默认是 bytes，而且转化成hex
 	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
 		if v.IsNil() {
 			out.write("null")
 			return out.err
 		}
-		out.write(`"`)
-		out.write(common.ToHex(v.Interface().([]byte)))
-		out.write(`"`)
+		data := v.Interface().([]byte)
+		//开启这个选项后，会把utf8的字符串转化成string,而不会弄成hex
+		if m.EnableUTF8BytesToString && utf8.Valid(data) {
+			s := string(data)
+			b, err := json.Marshal(s)
+			if err != nil {
+				return err
+			}
+			out.write(string(b))
+		} else {
+			out.write(`"`)
+			out.write(common.ToHex(data))
+			out.write(`"`)
+		}
 		return out.err
 	}
 
@@ -668,6 +687,9 @@ type Unmarshaler struct {
 	// failing to unmarshal.
 	AllowUnknownFields bool
 
+	//Enable utf8 bytes to string
+	EnableUTF8BytesToString bool
+
 	// A custom URL resolver to use when unmarshaling Any messages from JSON.
 	// If unset, the default resolution strategy is to extract the
 	// fully-qualified type name from the type URL and pass that to
@@ -727,7 +749,7 @@ func (u *Unmarshaler) unmarshalValue(target reflect.Value, inputValue json.RawMe
 	if targetType.Kind() == reflect.Ptr {
 		// If input value is "null" and target is a pointer type, then the field should be treated as not set
 		// UNLESS the target is structpb.Value, in which case it should be set to structpb.NullValue.
-		_, isJSONPBUnmarshaler := target.Interface().(JSONPBUnmarshaler)
+		_, isJSONPBUnmarshaler := target.Interface().(JSONPBunmarshaler)
 		if string(inputValue) == "null" && targetType != reflect.TypeOf(&stpb.Value{}) && !isJSONPBUnmarshaler {
 			return nil
 		}
@@ -736,7 +758,7 @@ func (u *Unmarshaler) unmarshalValue(target reflect.Value, inputValue json.RawMe
 		return u.unmarshalValue(target.Elem(), inputValue, prop)
 	}
 
-	if jsu, ok := target.Addr().Interface().(JSONPBUnmarshaler); ok {
+	if jsu, ok := target.Addr().Interface().(JSONPBunmarshaler); ok {
 		return jsu.UnmarshalJSONPB(u, []byte(inputValue))
 	}
 
@@ -1037,7 +1059,7 @@ func (u *Unmarshaler) unmarshalValue(target reflect.Value, inputValue json.RawMe
 		if err != nil {
 			return err
 		}
-		b, err := common.FromHex(hexstr)
+		b, err := parseBytes(hexstr, u.EnableUTF8BytesToString)
 		if err != nil {
 			return err
 		}
@@ -1308,4 +1330,25 @@ func checkRequiredFieldsInValue(v reflect.Value) error {
 		return checkRequiredFields(pm)
 	}
 	return nil
+}
+
+//ErrBytesFormat 错误的bytes 类型
+var ErrBytesFormat = errors.New("ErrBytesFormat")
+
+func parseBytes(jsonstr string, enableUTF8BytesToString bool) ([]byte, error) {
+	if jsonstr == "" {
+		return []byte{}, nil
+	}
+	if strings.HasPrefix(jsonstr, "str://") {
+		return []byte(jsonstr[len("str://"):]), nil
+	}
+	if strings.HasPrefix(jsonstr, "0x") || strings.HasPrefix(jsonstr, "0X") {
+		return common.FromHex(jsonstr)
+	}
+	//字符串不是 hex 格式， 也不是 str:// 格式，但是是一个普通的utf8 字符串
+	//那么强制转化为bytes, 注意这个选项默认不开启.
+	if utf8.ValidString(jsonstr) && enableUTF8BytesToString {
+		return []byte(jsonstr), nil
+	}
+	return nil, ErrBytesFormat
 }

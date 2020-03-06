@@ -21,7 +21,11 @@ func init() {
 	rand.Seed(types.Now().UnixNano())
 }
 
+// GetBalance 根据地址和执行器类型获取对应的金额
 func (wallet *Wallet) GetBalance(addr string, execer string) (*types.Account, error) {
+	if !wallet.isInited() {
+		return nil, types.ErrNotInited
+	}
 	return wallet.getBalance(addr, execer)
 }
 
@@ -34,18 +38,24 @@ func (wallet *Wallet) getBalance(addr string, execer string) (*types.Account, er
 	return reply[0], nil
 }
 
+// GetAllPrivKeys 获取所有私钥信息
 func (wallet *Wallet) GetAllPrivKeys() ([]crypto.PrivKey, error) {
+	if !wallet.isInited() {
+		return nil, types.ErrNotInited
+	}
+	wallet.mtx.Lock()
+	defer wallet.mtx.Unlock()
+
 	return wallet.getAllPrivKeys()
 }
 
 func (wallet *Wallet) getAllPrivKeys() ([]crypto.PrivKey, error) {
-	accounts, err := wallet.GetWalletAccounts()
+	accounts, err := wallet.getWalletAccounts()
 	if err != nil {
 		return nil, err
 	}
-	wallet.mtx.Lock()
-	defer wallet.mtx.Unlock()
-	ok, err := wallet.CheckWalletStatus()
+
+	ok, err := wallet.checkWalletStatus()
 	if !ok && err != types.ErrOnlyTicketUnLocked {
 		return nil, err
 	}
@@ -60,9 +70,16 @@ func (wallet *Wallet) getAllPrivKeys() ([]crypto.PrivKey, error) {
 	return privs, nil
 }
 
+// GetHeight 获取当前区块最新高度
 func (wallet *Wallet) GetHeight() int64 {
+	if !wallet.isInited() {
+		return 0
+	}
 	msg := wallet.client.NewMessage("blockchain", types.EventGetBlockHeight, nil)
-	wallet.client.Send(msg, true)
+	err := wallet.client.Send(msg, true)
+	if err != nil {
+		return 0
+	}
 	replyHeight, err := wallet.client.Wait(msg)
 	h := replyHeight.GetData().(*types.ReplyBlockHeight).Height
 	walletlog.Debug("getheight = ", "height", h)
@@ -84,7 +101,14 @@ func (wallet *Wallet) sendTransactionWait(payload types.Message, execer []byte, 
 	return nil
 }
 
+// SendTransaction 发送一笔交易
 func (wallet *Wallet) SendTransaction(payload types.Message, execer []byte, priv crypto.PrivKey, to string) (hash []byte, err error) {
+	if !wallet.isInited() {
+		return nil, types.ErrNotInited
+	}
+	wallet.mtx.Lock()
+	defer wallet.mtx.Unlock()
+
 	return wallet.sendTransaction(payload, execer, priv, to)
 }
 
@@ -92,14 +116,19 @@ func (wallet *Wallet) sendTransaction(payload types.Message, execer []byte, priv
 	if to == "" {
 		to = address.ExecAddress(string(execer))
 	}
-	tx := &types.Transaction{Execer: execer, Payload: types.Encode(payload), Fee: minFee, To: to}
+	tx := &types.Transaction{Execer: execer, Payload: types.Encode(payload), Fee: wallet.minFee, To: to}
 	tx.Nonce = rand.Int63()
-	tx.Fee, err = tx.GetRealFee(wallet.getFee())
+	proper, err := wallet.api.GetProperFee(nil)
 	if err != nil {
 		return nil, err
 	}
-	tx.SetExpire(time.Second * 120)
-	tx.Sign(int32(SignType), priv)
+	fee, err := tx.GetRealFee(proper.ProperFee)
+	if err != nil {
+		return nil, err
+	}
+	tx.Fee = fee
+	tx.SetExpire(wallet.client.GetConfig(), time.Second*120)
+	tx.Sign(int32(wallet.SignType), priv)
 	reply, err := wallet.sendTx(tx)
 	if err != nil {
 		return nil, err
@@ -118,6 +147,7 @@ func (wallet *Wallet) sendTx(tx *types.Transaction) (*types.Reply, error) {
 	return wallet.api.SendTx(tx)
 }
 
+// WaitTx 等待交易确认
 func (wallet *Wallet) WaitTx(hash []byte) *types.TransactionDetail {
 	return wallet.waitTx(hash)
 }
@@ -143,6 +173,7 @@ func (wallet *Wallet) waitTx(hash []byte) *types.TransactionDetail {
 	}
 }
 
+// WaitTxs 等待多个交易确认
 func (wallet *Wallet) WaitTxs(hashes [][]byte) (ret []*types.TransactionDetail) {
 	return wallet.waitTxs(hashes)
 }
@@ -168,7 +199,11 @@ func (wallet *Wallet) queryTx(hash []byte) (*types.TransactionDetail, error) {
 	}
 	return resp.Data.(*types.TransactionDetail), nil
 }
+
+// SendToAddress 想合约地址转账
 func (wallet *Wallet) SendToAddress(priv crypto.PrivKey, addrto string, amount int64, note string, Istoken bool, tokenSymbol string) (*types.ReplyHash, error) {
+	wallet.mtx.Lock()
+	defer wallet.mtx.Unlock()
 	return wallet.sendToAddress(priv, addrto, amount, note, Istoken, tokenSymbol)
 }
 
@@ -182,7 +217,7 @@ func (wallet *Wallet) createSendToAddress(addrto string, amount int64, note stri
 	create := &types.CreateTx{
 		To:          addrto,
 		Amount:      amount,
-		Note:        note,
+		Note:        []byte(note),
 		IsWithdraw:  isWithdraw,
 		IsToken:     Istoken,
 		TokenSymbol: tokenSymbol,
@@ -202,8 +237,13 @@ func (wallet *Wallet) createSendToAddress(addrto string, amount int64, note stri
 	if err != nil {
 		return nil, err
 	}
-	tx.SetExpire(time.Second * 120)
-	fee, err := tx.GetRealFee(wallet.getFee())
+	cfg := wallet.client.GetConfig()
+	tx.SetExpire(cfg, time.Second*120)
+	proper, err := wallet.api.GetProperFee(nil)
+	if err != nil {
+		return nil, err
+	}
+	fee, err := tx.GetRealFee(proper.ProperFee)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +254,12 @@ func (wallet *Wallet) createSendToAddress(addrto string, amount int64, note stri
 	if len(tx.Execer) == 0 {
 		tx.Execer = []byte(exec)
 	}
+
+	if cfg.IsPara() {
+		tx.Execer = []byte(cfg.GetTitle() + string(tx.Execer))
+		tx.To = address.ExecAddress(string(tx.Execer))
+	}
+
 	tx.Nonce = rand.Int63()
 	return tx, nil
 }
@@ -223,7 +269,7 @@ func (wallet *Wallet) sendToAddress(priv crypto.PrivKey, addrto string, amount i
 	if err != nil {
 		return nil, err
 	}
-	tx.Sign(int32(SignType), priv)
+	tx.Sign(int32(wallet.SignType), priv)
 
 	reply, err := wallet.api.SendTx(tx)
 	if err != nil {
@@ -249,7 +295,7 @@ func (wallet *Wallet) queryBalance(in *types.ReqBalance) ([]*types.Account, erro
 			}
 			exaddrs = append(exaddrs, addr)
 		}
-		accounts, err := accountdb.LoadAccounts(wallet.api, exaddrs)
+		accounts, err := wallet.accountdb.LoadAccounts(wallet.api, exaddrs)
 		if err != nil {
 			walletlog.Error("GetBalance", "err", err.Error())
 			return nil, err
@@ -260,7 +306,7 @@ func (wallet *Wallet) queryBalance(in *types.ReqBalance) ([]*types.Account, erro
 		addrs := in.GetAddresses()
 		var accounts []*types.Account
 		for _, addr := range addrs {
-			acc, err := accountdb.LoadExecAccountQueue(wallet.api, addr, execaddress)
+			acc, err := wallet.accountdb.LoadExecAccountQueue(wallet.api, addr, execaddress)
 			if err != nil {
 				walletlog.Error("GetBalance", "err", err.Error())
 				return nil, err
@@ -280,7 +326,10 @@ func (wallet *Wallet) getMinerColdAddr(addr string) ([]string, error) {
 	}
 
 	msg := wallet.client.NewMessage("exec", types.EventBlockChainQuery, &req)
-	wallet.client.Send(msg, true)
+	err := wallet.client.Send(msg, true)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := wallet.client.Wait(msg)
 	if err != nil {
 		return nil, err
@@ -289,7 +338,11 @@ func (wallet *Wallet) getMinerColdAddr(addr string) ([]string, error) {
 	return reply.Datas, nil
 }
 
+// IsCaughtUp 检测当前区块是否已经同步完成
 func (wallet *Wallet) IsCaughtUp() bool {
+	if !wallet.isInited() {
+		return false
+	}
 	if wallet.client == nil {
 		panic("wallet client not bind message queue.")
 	}

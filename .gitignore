@@ -1,3 +1,7 @@
+clean.sh
+rm.sh
+top.txt
+top2.txt
 datadir*
 *.log
 *.exe
@@ -5,7 +9,12 @@ datadir*
 *.bak
 .idea
 .vscode
+*.pprof
+*.test
 cmd/chain33/chain33
+cmd/tools/tools
+build/cert.pem
+build/key.pem
 build/chain33*
 build/datadir
 build/bityuan*
@@ -26,9 +35,8 @@ cmd/execblock/execblock
 cmd/miner_accounts/miner_accounts
 cmd/write/write
 build/autotest/autotest
-build/autotest/local/*.toml
-build/autotest/local/autotest*
-build/autotest/local/chain33*
+build/autotest/local/*
+!build/autotest/local/autotest.sh
 plugin/consensus/raft/chain33_raft-1/
 common/mavl/datastore
 .DS_Store

@@ -8,7 +8,12 @@ import (
 	"errors"
 )
 
+// chain33定义的错误类型
 var (
+	ErrSequenceNotMatch        = errors.New("ErrSequenceNotMatch")
+	ErrSequenceTooBig          = errors.New("ErrSequenceTooBig")
+	ErrTooManySeqCB            = errors.New("ErrTooManySeqCB")
+	ErrPushSeqPostData         = errors.New("ErrPushSeqPostData")
 	ErrMethodReturnType        = errors.New("ErrMethodReturnType")
 	ErrMethodNotFound          = errors.New("ErrMethodNotFound")
 	ErrExecBlockNil            = errors.New("ErrExecBlockNil")
@@ -24,7 +29,6 @@ var (
 	ErrReRunGenesis            = errors.New("ErrReRunGenesis")
 	ErrActionNotSupport        = errors.New("ErrActionNotSupport")
 	ErrQueryNotSupport         = errors.New("ErrQueryNotSupport")
-	ErrChannelFull             = errors.New("ErrChannelFull")
 	ErrAmount                  = errors.New("ErrAmount")
 	ErrMinerIsStared           = errors.New("ErrMinerIsStared")
 	ErrMinerNotStared          = errors.New("ErrMinerNotStared")
@@ -47,16 +51,19 @@ var (
 	ErrBlockNotFound           = errors.New("ErrBlockNotFound")
 	ErrLogType                 = errors.New("ErrLogType")
 	ErrInvalidParam            = errors.New("ErrInvalidParam")
+	ErrInvalidExpire           = errors.New("ErrInvalidExpire")
 	ErrInvalidAddress          = errors.New("ErrInvalidAddress")
+	ErrNotInited               = errors.New("ErrNotInited")
 
 	ErrStartBigThanEnd            = errors.New("ErrStartBigThanEnd")
 	ErrToAddrNotSameToExecAddr    = errors.New("ErrToAddrNotSameToExecAddr")
 	ErrTypeAsset                  = errors.New("ErrTypeAsset")
 	ErrEmpty                      = errors.New("ErrEmpty")
+	ErrIsClosed                   = errors.New("ErrIsClosed")
 	ErrSendSameToRecv             = errors.New("ErrSendSameToRecv")
 	ErrExecNameNotAllow           = errors.New("ErrExecNameNotAllow")
+	ErrExecNotFound               = errors.New("ErrExecNotFound")
 	ErrLocalDBPerfix              = errors.New("ErrLocalDBPerfix")
-	ErrTimeout                    = errors.New("ErrTimeout")
 	ErrBlockHeaderDifficulty      = errors.New("ErrBlockHeaderDifficulty")
 	ErrNoTx                       = errors.New("ErrNoTx")
 	ErrTxExist                    = errors.New("ErrTxExist")
@@ -71,6 +78,7 @@ var (
 	ErrFeeTooLow                  = errors.New("ErrFeeTooLow")
 	ErrEmptyTx                    = errors.New("ErrEmptyTx")
 	ErrTxFeeTooLow                = errors.New("ErrTxFeeTooLow")
+	ErrTxFeeTooHigh               = errors.New("ErrTxFeeTooHigh")
 	ErrTxMsgSizeTooBig            = errors.New("ErrTxMsgSizeTooBig")
 	ErrFutureBlock                = errors.New("ErrFutureBlock")
 	ErrHashNotFound               = errors.New("ErrHashNotFound")
@@ -78,7 +86,7 @@ var (
 	ErrNotSync                    = errors.New("ErrNotSync")
 	ErrSize                       = errors.New("ErrSize")
 
-	// BlockChain Error Types
+	// ErrHashNotExist BlockChain Error Types
 	ErrHashNotExist           = errors.New("ErrHashNotExist")
 	ErrHeightNotExist         = errors.New("ErrHeightNotExist")
 	ErrTxNotExist             = errors.New("ErrTxNotExist")
@@ -94,11 +102,10 @@ var (
 	ErrBlockHeightNoMatch     = errors.New("ErrBlockHeightNoEqual")
 	ErrParentTdNoExist        = errors.New("ErrParentTdNoExist")
 	ErrBlockHashNoMatch       = errors.New("ErrBlockHashNoMatch")
-	ErrIsClosed               = errors.New("ErrIsClosed")
 	ErrDecode                 = errors.New("ErrDecode")
 	ErrNotRollBack            = errors.New("ErrNotRollBack")
 	ErrPeerInfoIsNil          = errors.New("ErrPeerInfoIsNil")
-	//wallet
+	//ErrWalletIsLocked wallet
 	ErrWalletIsLocked       = errors.New("ErrWalletIsLocked")
 	ErrSaveSeedFirst        = errors.New("ErrSaveSeedFirst")
 	ErrUnLockFirst          = errors.New("ErrUnLockFirst")
@@ -131,12 +138,13 @@ var (
 	ErrFromHex            = errors.New("ErrFromHex")
 	ErrPrivKeyFromBytes   = errors.New("ErrFromHex")
 	ErrParentHash         = errors.New("ErrParentHash")
-
-	//p2p
+	ErrInvalidPassWord    = errors.New("ErrInvalidPassWord")
+	//ErrPing p2p模块错误类型
 	ErrPing       = errors.New("ErrPingSignature")
 	ErrVersion    = errors.New("ErrVersionNoSupport")
 	ErrStreamPing = errors.New("ErrStreamPing")
 	ErrPeerStop   = errors.New("ErrPeerStop")
+	ErrP2PChannel = errors.New("ErrIllegalP2PChannel")
 
 	ErrBlockSize                  = errors.New("ErrBlockSize")
 	ErrTxGroupIndex               = errors.New("ErrTxGroupIndex")
@@ -155,18 +163,36 @@ var (
 	ErrTxGroupNotSupport          = errors.New("ErrTxGroupNotSupport")
 	ErrNotAllowKey                = errors.New("ErrNotAllowKey")
 	ErrNotAllowMemSetKey          = errors.New("ErrNotAllowMemSetKey")
+	ErrNotAllowMemSetLocalKey     = errors.New("ErrNotAllowMemSetLocalKey")
 	ErrDataBaseDamage             = errors.New("ErrDataBaseDamage")
 	ErrIndex                      = errors.New("ErrIndex")
 	ErrTxGroupParaCount           = errors.New("ErrTxGroupParaCount")
+	ErrTxGroupParaMainMixed       = errors.New("ErrTxGroupParaMainMixed")
 
-	//rpc
-	ErrInvalidMainnetRpcAddr = errors.New("ErrInvalidMainnetRpcAddr")
+	//ErrInvalidMainnetRPCAddr rpc模块的错误类型
+	ErrInvalidMainnetRPCAddr = errors.New("ErrInvalidMainnetRPCAddr")
 
 	ErrDBFlag      = errors.New("ErrDBFlag")
 	ErrLocalPrefix = errors.New("ErrLocalPrefix")
 	ErrLocalKeyLen = errors.New("ErrLocalKeyLen")
+	//ErrNotSetInTransaction 必须set 在 事务 中
+	ErrNotSetInTransaction = errors.New("can not set kvs not in transaction")
+	ErrLocalDBTxDupOpen    = errors.New("ErrLocalDBTxDupOpen")
 
 	ErrCloneForkFrom      = errors.New("ErrCloneForkFrom")
 	ErrCloneForkToExist   = errors.New("ErrCloneForkToExist")
 	ErrQueryThistIsNotSet = errors.New("ErrQueryThistIsNotSet")
+
+	ErrHeightLessZero      = errors.New("ErrHeightLessZero")
+	ErrHeightOverflow      = errors.New("ErrHeightOverflow")
+	ErrRecordBlockSequence = errors.New("ErrRecordBlockSequence")
+	ErrExecPanic           = errors.New("ErrExecPanic")
+
+	ErrDisableWrite = errors.New("ErrDisableWrite")
+	ErrDisableRead  = errors.New("ErrDisableRead")
+
+	ErrConsensusHashErr  = errors.New("ErrConsensusHashErr")
+	ErrMaxCountPerTime   = errors.New("ErrMaxCountPerTime")
+	ErrInValidFileHeader = errors.New("ErrInValidFileHeader")
+	ErrFileExists        = errors.New("ErrFileExists")
 )

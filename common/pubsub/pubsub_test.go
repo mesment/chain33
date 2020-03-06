@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/check.v1"
+	check "gopkg.in/check.v1"
 )
 
 var _ = check.Suite(new(Suite))
@@ -98,11 +98,11 @@ func (s *Suite) TestUnsubAll(c *check.C) {
 
 	ps.Unsub(ch1)
 
-	m, ok := <-ch1
+	_, ok := <-ch1
 	c.Check(ok, check.Equals, false)
 
 	ps.Pub("hi", "t1")
-	m, ok = <-ch2
+	m := <-ch2
 	c.Check(m, check.Equals, "hi")
 
 	ps.Shutdown()

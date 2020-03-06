@@ -7,6 +7,7 @@ package util
 import (
 	"errors"
 
+	clientApi "github.com/33cn/chain33/client"
 	"github.com/33cn/chain33/common"
 	log "github.com/33cn/chain33/common/log/log15"
 	"github.com/33cn/chain33/queue"
@@ -17,7 +18,10 @@ import (
 func CheckBlock(client queue.Client, block *types.BlockDetail) error {
 	req := block
 	msg := client.NewMessage("consensus", types.EventCheckBlock, req)
-	client.Send(msg, true)
+	err := client.Send(msg, true)
+	if err != nil {
+		return err
+	}
 	resp, err := client.Wait(msg)
 	if err != nil {
 		return err
@@ -29,10 +33,13 @@ func CheckBlock(client queue.Client, block *types.BlockDetail) error {
 	return errors.New(string(reply.GetMsg()))
 }
 
-//ExecTx : To send lists of txs within a block to exector for exection
-func ExecTx(client queue.Client, prevStateRoot []byte, block *types.Block) *types.Receipts {
+//ExecTx : To send lists of txs within a block to exector for execution
+func ExecTx(client queue.Client, prevStateRoot []byte, block *types.Block) (*types.Receipts, error) {
 	list := &types.ExecTxList{
 		StateHash:  prevStateRoot,
+		ParentHash: block.ParentHash,
+		MainHash:   block.MainHash,
+		MainHeight: block.MainHeight,
 		Txs:        block.Txs,
 		BlockTime:  block.BlockTime,
 		Height:     block.Height,
@@ -40,40 +47,50 @@ func ExecTx(client queue.Client, prevStateRoot []byte, block *types.Block) *type
 		IsMempool:  false,
 	}
 	msg := client.NewMessage("execs", types.EventExecTxList, list)
-	client.Send(msg, true)
+	err := client.Send(msg, true)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Wait(msg)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	receipts := resp.GetData().(*types.Receipts)
-	return receipts
+	return receipts, nil
 }
 
 //ExecKVMemSet : send kv values to memory store and set it in db
-func ExecKVMemSet(client queue.Client, prevStateRoot []byte, height int64, kvset []*types.KeyValue, sync bool) []byte {
+func ExecKVMemSet(client queue.Client, prevStateRoot []byte, height int64, kvset []*types.KeyValue, sync bool, upgrade bool) ([]byte, error) {
 	set := &types.StoreSet{StateHash: prevStateRoot, KV: kvset, Height: height}
-	setwithsync := &types.StoreSetWithSync{Storeset: set, Sync: sync}
+	setwithsync := &types.StoreSetWithSync{Storeset: set, Sync: sync, Upgrade: upgrade}
 
 	msg := client.NewMessage("store", types.EventStoreMemSet, setwithsync)
-	client.Send(msg, true)
+	err := client.Send(msg, true)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Wait(msg)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	hash := resp.GetData().(*types.ReplyHash)
-	return hash.GetHash()
+	return hash.GetHash(), nil
 }
 
 //ExecKVSetCommit : commit the data set opetation to db
-func ExecKVSetCommit(client queue.Client, hash []byte) error {
-	req := &types.ReqHash{Hash: hash}
+func ExecKVSetCommit(client queue.Client, hash []byte, upgrade bool) error {
+	req := &types.ReqHash{Hash: hash, Upgrade: upgrade}
 	msg := client.NewMessage("store", types.EventStoreCommit, req)
-	client.Send(msg, true)
-	msg, err := client.Wait(msg)
+	err := client.Send(msg, true)
+	if err != nil {
+		return err
+	}
+	msg, err = client.Wait(msg)
 	if err != nil {
 		return err
 	}
 	hash = msg.GetData().(*types.ReplyHash).GetHash()
+	_ = hash
 	return nil
 }
 
@@ -81,33 +98,67 @@ func ExecKVSetCommit(client queue.Client, hash []byte) error {
 func ExecKVSetRollback(client queue.Client, hash []byte) error {
 	req := &types.ReqHash{Hash: hash}
 	msg := client.NewMessage("store", types.EventStoreRollback, req)
-	client.Send(msg, true)
-	msg, err := client.Wait(msg)
+	err := client.Send(msg, true)
+	if err != nil {
+		return err
+	}
+	msg, err = client.Wait(msg)
 	if err != nil {
 		return err
 	}
 	hash = msg.GetData().(*types.ReplyHash).GetHash()
+	_ = hash
 	return nil
 }
 
-func checkTxDupInner(txs []*types.TransactionCache) (ret []*types.TransactionCache) {
-	dupMap := make(map[string]bool)
-	for _, tx := range txs {
-		hash := string(tx.Hash())
-		if _, ok := dupMap[hash]; ok {
-			continue
+//DelDupTx 删除重复的交易
+func DelDupTx(txs []*types.TransactionCache) (ret []*types.TransactionCache) {
+	dupindex := make(map[string]int)
+	hasdup := false
+	for i, tx := range txs {
+		if _, ok := dupindex[string(tx.Hash())]; ok {
+			hasdup = true
 		}
-		dupMap[hash] = true
-		ret = append(ret, tx)
+		dupindex[string(tx.Hash())] = i
 	}
-	return ret
+	//没有重复的情况下，不需要重新处理
+	if !hasdup {
+		return txs
+	}
+	index := 0
+	for i, tx := range txs {
+		lastindex := dupindex[string(tx.Hash())]
+		if i == lastindex {
+			txs[index] = tx
+			index++
+		}
+	}
+	return txs[0:index]
+}
+
+//CheckDupTx : check use txs []*types.Transaction and not []*types.TransactionCache
+func CheckDupTx(client queue.Client, txs []*types.Transaction, height int64) (transactions []*types.Transaction, err error) {
+	txcache := make([]*types.TransactionCache, len(txs))
+	for i := 0; i < len(txcache); i++ {
+		txcache[i] = &types.TransactionCache{Transaction: txs[i]}
+	}
+	cache, err := CheckTxDup(client, txcache, height)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < len(cache); i++ {
+		transactions = append(transactions, cache[i].Transaction)
+	}
+	return transactions, nil
 }
 
 //CheckTxDup : check whether the tx is duplicated within the while chain
 func CheckTxDup(client queue.Client, txs []*types.TransactionCache, height int64) (transactions []*types.TransactionCache, err error) {
 	var checkHashList types.TxHashList
-	if types.IsFork(height, "ForkCheckTxDup") {
-		txs = checkTxDupInner(txs)
+	types.AssertConfig(client)
+	cfg := client.GetConfig()
+	if cfg.IsFork(height, "ForkCheckTxDup") {
+		txs = DelDupTx(txs)
 	}
 	for _, tx := range txs {
 		checkHashList.Hashes = append(checkHashList.Hashes, tx.Hash())
@@ -115,7 +166,11 @@ func CheckTxDup(client queue.Client, txs []*types.TransactionCache, height int64
 	}
 	checkHashList.Count = height
 	hashList := client.NewMessage("blockchain", types.EventTxHashList, &checkHashList)
-	client.Send(hashList, true)
+	err = client.Send(hashList, true)
+	if err != nil {
+		log.Error("send", "to blockchain EventTxHashList msg err", err)
+		return nil, err
+	}
 	dupTxList, err := client.Wait(hashList)
 	if err != nil {
 		return nil, err
@@ -150,6 +205,54 @@ func ReportErrEventToFront(logger log.Logger, client queue.Client, frommodule st
 	reportErrEvent.Frommodule = frommodule
 	reportErrEvent.Tomodule = tomodule
 	reportErrEvent.Error = err.Error()
-	msg := client.NewMessage(tomodule, types.EventErrToFront, &reportErrEvent)
-	client.Send(msg, false)
+
+	api, err := clientApi.New(client, nil)
+	if err != nil {
+		log.Error("client", "new err", err)
+	}
+
+	_, err = api.ExecWalletFunc(tomodule, "ErrToFront", &reportErrEvent)
+	if err != nil {
+		log.Error("send", "ErrToFront msg err", err)
+	}
+}
+
+//DelDupKey 删除重复的key
+func DelDupKey(kvs []*types.KeyValue) []*types.KeyValue {
+	dupindex := make(map[string]int)
+	n := 0
+	for _, kv := range kvs {
+		skey := string(kv.Key)
+		if index, ok := dupindex[skey]; ok {
+			//重复的key 替换老的key
+			kvs[index] = kv
+		} else {
+			dupindex[skey] = n
+			kvs[n] = kv
+			n++
+		}
+	}
+	return kvs[0:n]
+}
+
+//CmpBestBlock : 选择最优区块,通知共识模块newblock是否是最优区块
+// height,time,parentHash一致时根据共识各自规则判断
+func CmpBestBlock(client queue.Client, newBlock *types.Block, cmpHash []byte) bool {
+	cfg := client.GetConfig()
+	req := types.CmpBlock{Block: newBlock, CmpHash: cmpHash}
+	msg := client.NewMessage("consensus", types.EventCmpBestBlock, &req)
+	err := client.Send(msg, true)
+	if err != nil {
+		log.Error("CmpBestBlock:Send", "cmpHash", common.ToHex(cmpHash), "newBlockHash", common.ToHex(newBlock.Hash(cfg)), "err", err)
+		return false
+	}
+	resp, err := client.Wait(msg)
+	if err != nil {
+		log.Error("CmpBestBlock:Wait", "cmpHash", common.ToHex(cmpHash), "newBlockHash", common.ToHex(newBlock.Hash(cfg)), "err", err)
+		return false
+	}
+	reply := resp.GetData().(*types.Reply)
+
+	log.Debug("CmpBestBlock", "newBlockHash", common.ToHex(newBlock.Hash(cfg)), "cmpHash", common.ToHex(cmpHash), "isBestBlock", reply.IsOk)
+	return reply.IsOk
 }

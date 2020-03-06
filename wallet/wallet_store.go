@@ -16,7 +16,7 @@ var (
 	storelog = walletlog.New("submodule", "store")
 )
 
-func NewStore(db db.DB) *walletStore {
+func newStore(db db.DB) *walletStore {
 	return &walletStore{Store: wcom.NewStore(db)}
 }
 
@@ -32,12 +32,17 @@ func (ws *walletStore) SetFeeAmount(FeeAmount int64) error {
 		return types.ErrMarshal
 	}
 
-	ws.GetDB().SetSync(CalcWalletPassKey(), FeeAmountbytes)
+	err = ws.GetDB().SetSync(CalcWalletPassKey(), FeeAmountbytes)
+	if err != nil {
+		storelog.Error("SetFeeAmount", "SetSync error", err)
+		return err
+	}
 	return nil
 }
 
-func (store *walletStore) GetFeeAmount(minFee int64) int64 {
-	FeeAmountbytes, err := store.Get(CalcWalletPassKey())
+// GetFeeAmount 获取手续费
+func (ws *walletStore) GetFeeAmount(minFee int64) int64 {
+	FeeAmountbytes, err := ws.Get(CalcWalletPassKey())
 	if FeeAmountbytes == nil || err != nil {
 		storelog.Debug("GetFeeAmount", "Get from db error", err)
 		return minFee
@@ -51,12 +56,17 @@ func (store *walletStore) GetFeeAmount(minFee int64) int64 {
 	return FeeAmount
 }
 
-func (store *walletStore) SetWalletPassword(newpass string) {
-	store.GetDB().SetSync(CalcWalletPassKey(), []byte(newpass))
+// SetWalletPassword 设置钱包的密码
+func (ws *walletStore) SetWalletPassword(newpass string) {
+	err := ws.GetDB().SetSync(CalcWalletPassKey(), []byte(newpass))
+	if err != nil {
+		storelog.Error("SetWalletPassword", "SetSync error", err)
+	}
 }
 
-func (store *walletStore) GetWalletPassword() string {
-	passwordbytes, err := store.Get(CalcWalletPassKey())
+// GetWalletPassword 获取钱包的密码
+func (ws *walletStore) GetWalletPassword() string {
+	passwordbytes, err := ws.Get(CalcWalletPassKey())
 	if passwordbytes == nil || err != nil {
 		storelog.Error("GetWalletPassword", "Get from db error", err)
 		return ""

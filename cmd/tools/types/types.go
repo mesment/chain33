@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package types 开发者工具相关常量等的定义
 package types
 
+//const
 const (
 	// 通过使用 go vendor 工具，从三方代码库中下载对应的插件代码
 	KeyImportPackage            = "import_package"
@@ -18,8 +20,10 @@ const (
 	KeyTemplateFilePath         = "template_file_path"
 	KeyUpdateInit               = "update_init"
 	KeyCreatePlugin             = "create_plugin"
+	KeyGenDapp                  = "generate_dapp"
+	KeyDappOutDir               = "generate_dapp_out_dir"
 
-	DEF_CPM_CONFIGFILE = "chain33.cpm.toml"
+	DefCpmConfigfile = "chain33.cpm.toml"
 
 	TagGoPath          = "${GOPATH}"
 	TagProjectName     = "${PROJECTNAME}"   // 项目名称替换标签
@@ -34,4 +38,18 @@ const (
 	TagLogMapText      = "${LOGMAPTEXT}"
 	TagTypeMapText     = "${TYPEMAPTEXT}"
 	TagTypeName        = "${TYPENAME}"
+
+	//TagImport
+	TagImportPath = "${IMPORTPATH}"
+
+	//Tag proto file
+	TagProtoFileContent = "${PROTOFILECONTENT}"
+	TagProtoFileAppend  = "${PROTOFILEAPPEND}"
+
+	//Tag exec.go file
+	TagExecFileContent         = "${EXECFILECONTENT}"
+	TagExecLocalFileContent    = "${EXECLOCALFILECONTENT}"
+	TagExecDelLocalFileContent = "${EXECDELLOCALFILECONTENT}"
+
+	TagExecObject = "${EXEC_OBJECT}" //执行器类函数接收对象, 默认为首字母
 )

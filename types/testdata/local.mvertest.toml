@@ -45,18 +45,19 @@ isRecordBlockSequence=false
 enableTxQuickIndex=false
 
 [p2p]
-seeds=[]
 enable=true
-isSeed=false
-serverStart=true
-innerSeedEnable=true
-useGithub=true
-innerBounds=300
-msgCacheSize=10240
 driver="leveldb"
 dbPath="datadir/addrbook"
 dbCache=4
 grpcLogFile="grpc33.log"
+
+[p2p.sub.gossip]
+isSeed=false
+serverStart=true
+innerSeedEnable=true
+innerBounds=300
+
+[p2p.sub.dht]
 
 [rpc]
 jrpcBindAddr="localhost:8801"
@@ -67,7 +68,7 @@ grpcFuncWhitelist=["*"]
 
 [mempool]
 poolCacheSize=102400
-minTxFee=100000
+minTxFeeRate=100000
 maxTxNumPerAccount=100
 
 [consensus]
@@ -81,6 +82,34 @@ name2="ticket-bityuan"
 
 [mver.consensus.ForkMinerTime]
 name2="ticket-bityuanv5"
+
+[mver.consensus.ForkChainParamV1]
+name2="ticket-bityuanv1"
+
+[mver.consensus.ForkChainParamV2]
+name2="ticket-bityuanv2"
+
+[mver.consensus.ticket]
+ticketPrice = 10000
+ticketFrozenTime = 5    #5s only for test
+ticketWithdrawTime = 10 #10s only for test
+ticketMinerWaitTime = 2 #2s only for test
+targetTimespan = 1304
+targetTimePerBlock = 16
+retargetAdjustmentFactor = 4
+futureBlockTime = 16
+
+[mver.consensus.ticket.ForkChainParamV1]
+ticketPrice = 20000
+targetTimespan = 2304
+targetTimePerBlock = 26
+
+
+[mver.consensus.ticket.ForkChainParamV2]
+ticketPrice = 30000
+targetTimespan =3304
+targetTimePerBlock = 36
+
 
 [consensus.sub.ticket]
 genesisBlockTime=1526486816
@@ -173,7 +202,8 @@ name2="ticket-bityuanv5-enable"
 #但是我们可以替换
 [fork.system]
 ForkChainParamV1= 10
-ForkChainParamV2= 10
+ForkChainParamV2= 20
+ForkStateDBSet=-1
 ForkCheckTxDup=0
 ForkBlockHash= 1
 ForkMinerTime= 10
@@ -186,7 +216,14 @@ ForkExecRollback= 450000
 ForkTxHeight= -1
 ForkTxGroupPara= -1
 ForkCheckBlockTime=1200000
-
+ForkMultiSignAddress=1298600
+ForkBlockCheck=1
+ForkLocalDBAccess=0
+ForkBase58AddressCheck=1800000
+ForkEnableParaRegExec=0
+ForkCacheDriver=0
+ForkTicketFundAddrV1=-1
+ForkRootHash=1
 [fork.sub.coins]
 Enable=0
 
@@ -194,3 +231,5 @@ Enable=0
 Enable=0
 ForkManageExec=100000
 
+[fork.sub.store-kvmvccmavl]
+ForkKvmvccmavl=1

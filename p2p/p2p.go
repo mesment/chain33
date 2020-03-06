@@ -2,57 +2,113 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package p2p 实现了chain33网络协议
 package p2p
 
 import (
 	"fmt"
+	"math/rand"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/33cn/chain33/client"
 	l "github.com/33cn/chain33/common/log/log15"
 	"github.com/33cn/chain33/queue"
 	"github.com/33cn/chain33/types"
 
 	// register gzip
+	"github.com/33cn/chain33/p2p/manage"
 	_ "google.golang.org/grpc/encoding/gzip"
 )
+
+func init() {
+	manage.RegisterP2PCreate(manage.GossipTypeName, New)
+}
 
 var (
 	log = l.New("module", "p2p")
 )
 
+// p2p 子配置
+type subConfig struct {
+	// P2P服务监听端口号
+	Port int32 `protobuf:"varint,1,opt,name=port" json:"port,omitempty"`
+	// 种子节点，格式为ip:port，多个节点以逗号分隔，如seeds=
+	Seeds []string `protobuf:"bytes,2,rep,name=seeds" json:"seeds,omitempty"`
+	// 是否为种子节点
+	IsSeed bool `protobuf:"varint,3,opt,name=isSeed" json:"isSeed,omitempty"`
+	//固定连接节点，只连接配置项seeds中的节点
+	FixedSeed bool `protobuf:"varint,4,opt,name=fixedSeed" json:"fixedSeed,omitempty"`
+	// 是否使用内置的种子节点
+	InnerSeedEnable bool `protobuf:"varint,5,opt,name=innerSeedEnable" json:"innerSeedEnable,omitempty"`
+	// 是否使用Github获取种子节点
+	UseGithub bool `protobuf:"varint,6,opt,name=useGithub" json:"useGithub,omitempty"`
+	// 是否作为服务端，对外提供服务
+	ServerStart bool `protobuf:"varint,7,opt,name=serverStart" json:"serverStart,omitempty"`
+	// 最多的接入节点个数
+	InnerBounds int32 `protobuf:"varint,8,opt,name=innerBounds" json:"innerBounds,omitempty"`
+	//交易开始采用哈希广播的ttl
+	LightTxTTL int32 `protobuf:"varint,9,opt,name=lightTxTTL" json:"lightTxTTL,omitempty"`
+	// 最大传播ttl, ttl达到该值将停止继续向外发送
+	MaxTTL int32 `protobuf:"varint,10,opt,name=maxTTL" json:"maxTTL,omitempty"`
+	// p2p网络频道,用于区分主网/测试网/其他网络
+	Channel int32 `protobuf:"varint,11,opt,name=channel" json:"channel,omitempty"`
+	//区块轻广播的最低打包交易数, 大于该值时区块内交易采用短哈希广播
+	MinLtBlockTxNum int32 `protobuf:"varint,12,opt,name=minLtBlockTxNum" json:"minLtBlockTxNum,omitempty"`
+	//指定p2p类型, 支持gossip, dht
+}
+
+// P2p interface
 type P2p struct {
+	api          client.QueueProtocolAPI
 	client       queue.Client
 	node         *Node
 	p2pCli       EventInterface
 	txCapcity    int32
 	txFactory    chan struct{}
 	otherFactory chan struct{}
-	closed       int32
+	waitRestart  chan struct{}
+	taskGroup    *sync.WaitGroup
+
+	closed   int32
+	restart  int32
+	chainCfg *types.Chain33Config
+	p2pCfg   *types.P2P
+	subCfg   *subConfig
+	mgr      *manage.P2PMgr
+	subChan  chan interface{}
 }
 
-func New(cfg *types.P2P) *P2p {
-	if cfg.Version == 0 {
-		if types.IsTestNet() {
-			cfg.Version = 119
-			cfg.VerMix = 118
-			cfg.VerMax = 128
-		} else {
-			cfg.Version = 10020
-			cfg.VerMix = 10020
-			cfg.VerMax = 11000
-		}
+// New produce a p2p object
+func New(mgr *manage.P2PMgr, subCfg []byte) manage.IP2P {
+	cfg := mgr.ChainCfg
+	p2pCfg := cfg.GetModuleConfig().P2P
+	mcfg := &subConfig{}
+	types.MustDecode(subCfg, mcfg)
+	//主网的channel默认设为0, 测试网未配置时设为默认
+	if cfg.IsTestNet() && mcfg.Channel == 0 {
+		mcfg.Channel = defaultTestNetChannel
+	}
+	//ttl至少设为2
+	if mcfg.LightTxTTL <= 1 {
+		mcfg.LightTxTTL = DefaultLtTxBroadCastTTL
+	}
+	if mcfg.MaxTTL <= 0 {
+		mcfg.MaxTTL = DefaultMaxTxBroadCastTTL
 	}
 
-	VERSION = cfg.Version
-	log.Info("p2p", "Version", VERSION)
-
-	if cfg.InnerBounds == 0 {
-		cfg.InnerBounds = 500
+	if mcfg.MinLtBlockTxNum <= 0 {
+		mcfg.MinLtBlockTxNum = DefaultMinLtBlockTxNum
 	}
-	log.Info("p2p", "InnerBounds", cfg.InnerBounds)
 
-	node, err := NewNode(cfg)
+	log.Info("p2p", "Channel", mcfg.Channel, "Version", VERSION, "IsTest", cfg.IsTestNet())
+	if mcfg.InnerBounds == 0 {
+		mcfg.InnerBounds = 500
+	}
+	log.Info("p2p", "InnerBounds", mcfg.InnerBounds)
+
+	node, err := NewNode(mgr, mcfg)
 	if err != nil {
 		log.Error(err.Error())
 		return nil
@@ -62,34 +118,100 @@ func New(cfg *types.P2P) *P2p {
 	p2p.p2pCli = NewP2PCli(p2p)
 	p2p.txFactory = make(chan struct{}, 1000)    // 1000 task
 	p2p.otherFactory = make(chan struct{}, 1000) //other task 1000
+	p2p.waitRestart = make(chan struct{}, 1)
 	p2p.txCapcity = 1000
+	p2p.p2pCfg = p2pCfg
+	p2p.subCfg = mcfg
+	p2p.client = mgr.Client
+	p2p.mgr = mgr
+	p2p.api = mgr.SysApi
+	p2p.taskGroup = &sync.WaitGroup{}
 	return p2p
 }
+
+//Wait wait for ready
+func (network *P2p) Wait() {}
 
 func (network *P2p) isClose() bool {
 	return atomic.LoadInt32(&network.closed) == 1
 }
 
-func (network *P2p) Close() {
-	atomic.StoreInt32(&network.closed, 1)
-	log.Debug("close", "network", "ShowTaskCapcity done")
-	network.node.Close()
-	log.Debug("close", "node", "done")
-	if network.client != nil {
-		network.client.Close()
-	}
-	network.node.pubsub.Shutdown()
+func (network *P2p) isRestart() bool {
+	return atomic.LoadInt32(&network.restart) == 1
 }
 
-func (network *P2p) SetQueueClient(client queue.Client) {
-	network.client = client
-	network.node.SetQueueClient(client)
-	go func() {
-		log.Info("p2p", "setqueuecliet", "ok")
-		network.node.Start()
-		network.subP2pMsg()
-		network.loadP2PPrivKeyToWallet()
-	}()
+// Close network client
+func (network *P2p) CloseP2P() {
+	log.Info("p2p network start shutdown")
+	atomic.StoreInt32(&network.closed, 1)
+	//等待业务协程停止
+	network.waitTaskDone()
+	network.node.Close()
+	network.mgr.PubSub.Unsub(network.subChan)
+}
+
+// SetQueueClient set the queue
+func (network *P2p) StartP2P() {
+	network.node.SetQueueClient(network.client)
+
+	go func(p2p *P2p) {
+
+		if p2p.isRestart() {
+			p2p.node.Start()
+			atomic.StoreInt32(&p2p.restart, 0)
+			//开启业务处理协程
+			network.waitRestart <- struct{}{}
+			return
+		}
+
+		p2p.subP2pMsg()
+		key, pub := p2p.node.nodeInfo.addrBook.GetPrivPubKey()
+		log.Debug("key pub:", pub, "")
+		if key == "" {
+			if p2p.p2pCfg.WaitPid { //key为空，则为初始钱包，阻塞模式，一直等到钱包导入助记词，解锁
+				if p2p.genAirDropKeyFromWallet() != nil {
+					return
+				}
+			} else {
+				//创建随机Pid,会同时出现node award ,airdropaddr
+				p2p.node.nodeInfo.addrBook.ResetPeerkey(key, pub)
+				go p2p.genAirDropKeyFromWallet()
+			}
+
+		} else {
+			//key 有两种可能，老版本的随机key,也有可能是seed的key, 非阻塞模式
+			go p2p.genAirDropKeyFromWallet()
+
+		}
+		p2p.node.Start()
+		log.Debug("SetQueueClient gorountine ret")
+
+	}(network)
+}
+
+func (network *P2p) loadP2PPrivKeyToWallet() error {
+	var parm types.ReqWalletImportPrivkey
+	parm.Privkey, _ = network.node.nodeInfo.addrBook.GetPrivPubKey()
+	parm.Label = "node award"
+
+ReTry:
+	resp, err := network.api.ExecWalletFunc("wallet", "WalletImportPrivkey", &parm)
+	if err != nil {
+		if err == types.ErrPrivkeyExist {
+			return nil
+		}
+		if err == types.ErrLabelHasUsed {
+			//切换随机lable
+			parm.Label = fmt.Sprintf("node award %v", P2pComm.RandStr(3))
+			time.Sleep(time.Second)
+			goto ReTry
+		}
+		log.Error("loadP2PPrivKeyToWallet", "err", err.Error())
+		return err
+	}
+
+	log.Debug("loadP2PPrivKeyToWallet", "resp", resp.(*types.WalletAccount))
+	return nil
 }
 
 func (network *P2p) showTaskCapcity() {
@@ -106,65 +228,107 @@ func (network *P2p) showTaskCapcity() {
 	}
 }
 
-func (network *P2p) loadP2PPrivKeyToWallet() error {
-
+func (network *P2p) genAirDropKeyFromWallet() error {
+	_, savePub := network.node.nodeInfo.addrBook.GetPrivPubKey()
 	for {
 		if network.isClose() {
-			return nil
-		}
-		msg := network.client.NewMessage("wallet", types.EventGetWalletStatus, nil)
-		err := network.client.SendTimeout(msg, true, time.Minute)
-		if err != nil {
-			log.Error("GetWalletStatus", "Error", err.Error())
-			time.Sleep(time.Second)
-			continue
+			log.Error("genAirDropKeyFromWallet", "p2p closed", "")
+			return fmt.Errorf("p2p closed")
 		}
 
-		resp, err := network.client.WaitTimeout(msg, time.Minute)
+		resp, err := network.api.ExecWalletFunc("wallet", "GetWalletStatus", &types.ReqNil{})
 		if err != nil {
 			time.Sleep(time.Second)
 			continue
 		}
-		if resp.GetData().(*types.WalletStatus).GetIsWalletLock() { //上锁
+		if resp.(*types.WalletStatus).GetIsWalletLock() { //上锁
+			if savePub == "" {
+				log.Warn("P2P Stuck ! Wallet must be unlock and save with mnemonics")
+
+			}
 			time.Sleep(time.Second)
 			continue
 		}
 
-		if !resp.GetData().(*types.WalletStatus).GetIsHasSeed() { //无种子
-			time.Sleep(time.Second)
+		if !resp.(*types.WalletStatus).GetIsHasSeed() { //无种子
+			if savePub == "" {
+				log.Warn("P2P Stuck ! Wallet must be imported with mnemonics")
+
+			}
+			time.Sleep(time.Second * 5)
 			continue
 		}
 
 		break
 	}
-	var parm types.ReqWalletImportPrivkey
-	parm.Privkey, _ = network.node.nodeInfo.addrBook.GetPrivPubKey()
-	parm.Label = "node award"
-ReTry:
-	msg := network.client.NewMessage("wallet", types.EventWalletImportPrivkey, &parm)
-	err := network.client.SendTimeout(msg, true, time.Minute)
+
+	r := rand.New(rand.NewSource(types.Now().Unix()))
+	var minIndex int32 = 100000000
+	randIndex := minIndex + r.Int31n(1000000)
+	reqIndex := &types.Int32{Data: randIndex}
+	msg, err := network.api.ExecWalletFunc("wallet", "NewAccountByIndex", reqIndex)
 	if err != nil {
-		log.Error("ImportPrivkey", "Error", err.Error())
+		log.Error("genAirDropKeyFromWallet", "err", err)
 		return err
 	}
-	resp, err := network.client.WaitTimeout(msg, time.Minute)
-	if err != nil {
-		if err == types.ErrPrivkeyExist {
-			return nil
+	var hexPrivkey string
+	if reply, ok := msg.(*types.ReplyString); !ok {
+		log.Error("genAirDropKeyFromWallet", "wrong format data", "")
+		panic(err)
 
-		}
-		if err == types.ErrLabelHasUsed {
-			//切换随机lable
-			parm.Label = fmt.Sprintf("node award %v", P2pComm.RandStr(3))
-			time.Sleep(time.Second)
-			goto ReTry
-		}
-		log.Error("loadP2PPrivKeyToWallet", "err", err.Error())
-		return err
+	} else {
+		hexPrivkey = reply.GetData()
+	}
+	if hexPrivkey[:2] == "0x" {
+		hexPrivkey = hexPrivkey[2:]
 	}
 
-	log.Debug("loadP2PPrivKeyToWallet", "resp", resp.GetData())
+	hexPubkey, err := P2pComm.Pubkey(hexPrivkey)
+	if err != nil {
+		log.Error("genAirDropKeyFromWallet", "gen pub error", err)
+		panic(err)
+	}
+
+	log.Info("genAirDropKeyFromWallet", "pubkey", hexPubkey)
+
+	if savePub == hexPubkey {
+		return nil
+	}
+
+	if savePub != "" {
+		//priv,pub是随机公私钥对，兼容老版本，先对其进行导入钱包处理
+		err = network.loadP2PPrivKeyToWallet()
+		if err != nil {
+			log.Error("genAirDropKeyFromWallet", "loadP2PPrivKeyToWallet error", err)
+			panic(err)
+		}
+		network.node.nodeInfo.addrBook.ResetPeerkey(hexPrivkey, hexPubkey)
+		//重启p2p模块
+		log.Info("genAirDropKeyFromWallet", "p2p will Restart....")
+		network.ReStart()
+		return nil
+	}
+	//覆盖addrbook 中的公私钥对
+	network.node.nodeInfo.addrBook.ResetPeerkey(hexPrivkey, hexPubkey)
+
 	return nil
+}
+
+//ReStart p2p
+func (network *P2p) ReStart() {
+	//避免重复
+	if !atomic.CompareAndSwapInt32(&network.restart, 0, 1) {
+		return
+	}
+	log.Info("p2p restart, wait p2p task done")
+	network.waitTaskDone()
+	network.node.Close()
+	node, err := NewNode(network.mgr, network.subCfg) //创建新的node节点
+	if err != nil {
+		panic(err.Error())
+	}
+	network.node = node
+	network.StartP2P()
 
 }
 
@@ -175,15 +339,21 @@ func (network *P2p) subP2pMsg() {
 
 	go network.showTaskCapcity()
 	go func() {
-		defer func() {
-			close(network.otherFactory)
-			close(network.txFactory)
-		}()
+
 		var taskIndex int64
-		network.client.Sub("p2p")
-		for msg := range network.client.Recv() {
+		//从p2p manger获取pub的系统消息
+		network.subChan = network.mgr.PubSub.Sub(manage.GossipTypeName)
+		for data := range network.subChan {
+
+			msg, ok := data.(*queue.Message)
+			if !ok {
+				log.Debug("subP2pMsg", "assetMsg", ok)
+				continue
+			}
 			if network.isClose() {
 				log.Debug("subP2pMsg", "loop", "done")
+				close(network.otherFactory)
+				close(network.txFactory)
 				return
 			}
 			taskIndex++
@@ -197,20 +367,21 @@ func (network *P2p) subP2pMsg() {
 				}
 			}
 			switch msg.Ty {
+
 			case types.EventTxBroadcast: //广播tx
-				go network.p2pCli.BroadCastTx(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.BroadCastTx)
 			case types.EventBlockBroadcast: //广播block
-				go network.p2pCli.BlockBroadcast(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.BlockBroadcast)
 			case types.EventFetchBlocks:
-				go network.p2pCli.GetBlocks(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.GetBlocks)
 			case types.EventGetMempool:
-				go network.p2pCli.GetMemPool(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.GetMemPool)
 			case types.EventPeerInfo:
-				go network.p2pCli.GetPeerInfo(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.GetPeerInfo)
 			case types.EventFetchBlockHeaders:
-				go network.p2pCli.GetHeaders(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.GetHeaders)
 			case types.EventGetNetInfo:
-				go network.p2pCli.GetNetInfo(msg, taskIndex)
+				network.processEvent(msg, taskIndex, network.p2pCli.GetNetInfo)
 			default:
 				log.Warn("unknown msgtype", "msg", msg)
 				msg.Reply(network.client.NewMessage("", msg.Ty, types.Reply{Msg: []byte("unknown msgtype")}))
@@ -222,4 +393,33 @@ func (network *P2p) subP2pMsg() {
 
 	}()
 
+}
+
+func (network *P2p) processEvent(msg *queue.Message, taskIdx int64, eventFunc p2pEventFunc) {
+
+	//检测重启标志，停止分发事件，需要等待重启
+	if network.isRestart() {
+		log.Info("wait for p2p restart....")
+		<-network.waitRestart
+		log.Info("p2p restart ok....")
+	}
+	network.taskGroup.Add(1)
+	go func() {
+		defer network.taskGroup.Done()
+		eventFunc(msg, taskIdx)
+	}()
+}
+
+func (network *P2p) waitTaskDone() {
+
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		network.taskGroup.Wait()
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second * 20):
+		log.Error("P2pWaitTaskDone", "err", "20s timeout")
+	}
 }

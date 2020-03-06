@@ -7,14 +7,18 @@ package p2p
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/33cn/chain33/p2p/manage"
 
 	"github.com/33cn/chain33/common/db"
 	"github.com/33cn/chain33/types"
 )
 
+// Start addrbook start
 func (a *AddrBook) Start() error {
 	log.Debug("addrbook start")
 	a.loadDb()
@@ -22,18 +26,20 @@ func (a *AddrBook) Start() error {
 	return nil
 }
 
+// Close addrbook close
 func (a *AddrBook) Close() {
 	a.Quit <- struct{}{}
 	a.bookDb.Close()
 
 }
 
-//peer address manager
+// AddrBook peer address manager
 type AddrBook struct {
 	mtx      sync.Mutex
 	ourAddrs map[string]*NetAddress
-	addrPeer map[string]*knownAddress
-	cfg      *types.P2P
+	addrPeer map[string]*KnownAddress
+	p2pCfg   *types.P2P
+	cfg      *subConfig
 	keymtx   sync.Mutex
 	privkey  string
 	pubkey   string
@@ -41,7 +47,8 @@ type AddrBook struct {
 	Quit     chan struct{}
 }
 
-type knownAddress struct {
+// KnownAddress defines known address type
+type KnownAddress struct {
 	kmtx        sync.Mutex
 	Addr        *NetAddress `json:"addr"`
 	Attempts    uint        `json:"attempts"`
@@ -49,7 +56,8 @@ type knownAddress struct {
 	LastSuccess time.Time   `json:"lastsuccess"`
 }
 
-func (a *AddrBook) GetPeerStat(addr string) *knownAddress {
+// GetPeerStat get peer stat
+func (a *AddrBook) GetPeerStat(addr string) *KnownAddress {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 	if peer, ok := a.addrPeer[addr]; ok {
@@ -59,7 +67,7 @@ func (a *AddrBook) GetPeerStat(addr string) *knownAddress {
 
 }
 
-func (a *AddrBook) setAddrStat(addr string, run bool) (*knownAddress, bool) {
+func (a *AddrBook) setAddrStat(addr string, run bool) (*KnownAddress, bool) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 	if peer, ok := a.addrPeer[addr]; ok {
@@ -74,20 +82,25 @@ func (a *AddrBook) setAddrStat(addr string, run bool) (*knownAddress, bool) {
 	return nil, false
 }
 
-func NewAddrBook(cfg *types.P2P) *AddrBook {
+// NewAddrBook create a addrbook
+func NewAddrBook(cfg *types.P2P, subCfg *subConfig) *AddrBook {
 	a := &AddrBook{
 
 		ourAddrs: make(map[string]*NetAddress),
-		addrPeer: make(map[string]*knownAddress),
-		cfg:      cfg,
+		addrPeer: make(map[string]*KnownAddress),
+		p2pCfg:   cfg,
 		Quit:     make(chan struct{}, 1),
+		cfg:      subCfg,
 	}
-	a.Start()
+	err := a.Start()
+	if err != nil {
+		return nil
+	}
 	return a
 }
 
-func newKnownAddress(addr *NetAddress) *knownAddress {
-	return &knownAddress{
+func newKnownAddress(addr *NetAddress) *KnownAddress {
+	return &KnownAddress{
 		kmtx:        sync.Mutex{},
 		Addr:        addr,
 		Attempts:    0,
@@ -95,7 +108,7 @@ func newKnownAddress(addr *NetAddress) *knownAddress {
 	}
 }
 
-func (ka *knownAddress) markGood() {
+func (ka *KnownAddress) markGood() {
 	ka.kmtx.Lock()
 	defer ka.kmtx.Unlock()
 	now := types.Now()
@@ -104,10 +117,11 @@ func (ka *knownAddress) markGood() {
 	ka.LastSuccess = now
 }
 
-func (ka *knownAddress) Copy() *knownAddress {
+// Copy a KnownAddress
+func (ka *KnownAddress) Copy() *KnownAddress {
 	ka.kmtx.Lock()
 
-	ret := knownAddress{
+	ret := KnownAddress{
 		Addr:        ka.Addr.Copy(),
 		Attempts:    ka.Attempts,
 		LastAttempt: ka.LastAttempt,
@@ -117,7 +131,7 @@ func (ka *knownAddress) Copy() *knownAddress {
 	return &ret
 }
 
-func (ka *knownAddress) markAttempt() {
+func (ka *KnownAddress) markAttempt() {
 	ka.kmtx.Lock()
 	defer ka.kmtx.Unlock()
 
@@ -127,12 +141,14 @@ func (ka *knownAddress) markAttempt() {
 
 }
 
-func (ka *knownAddress) GetAttempts() uint {
+// GetAttempts return attempts
+func (ka *KnownAddress) GetAttempts() uint {
 	ka.kmtx.Lock()
 	defer ka.kmtx.Unlock()
 	return ka.Attempts
 }
 
+// ISOurAddress determine if the address is ours
 func (a *AddrBook) ISOurAddress(addr *NetAddress) bool {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -143,6 +159,7 @@ func (a *AddrBook) ISOurAddress(addr *NetAddress) bool {
 	return false
 }
 
+// IsOurStringAddress determine if the address is ours
 func (a *AddrBook) IsOurStringAddress(addr string) bool {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -152,6 +169,7 @@ func (a *AddrBook) IsOurStringAddress(addr string) bool {
 	return false
 }
 
+// AddOurAddress add a address for ours
 func (a *AddrBook) AddOurAddress(addr *NetAddress) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -159,6 +177,7 @@ func (a *AddrBook) AddOurAddress(addr *NetAddress) {
 	a.ourAddrs[addr.String()] = addr
 }
 
+// Size return addrpeer size
 func (a *AddrBook) Size() int {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -166,13 +185,13 @@ func (a *AddrBook) Size() int {
 }
 
 type addrBookJSON struct {
-	Addrs []*knownAddress `json:"addrs"`
+	Addrs []*KnownAddress `json:"addrs"`
 }
 
 func (a *AddrBook) saveToDb() {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
-	addrs := []*knownAddress{}
+	addrs := []*KnownAddress{}
 
 	seeds := a.cfg.Seeds
 	seedsMap := make(map[string]int)
@@ -199,41 +218,33 @@ func (a *AddrBook) saveToDb() {
 		return
 	}
 	log.Debug("saveToDb", "addrs", string(jsonBytes))
-	a.bookDb.Set([]byte(addrkeyTag), jsonBytes)
+	err = a.bookDb.Set([]byte(addrkeyTag), jsonBytes)
+	if err != nil {
+		panic(err)
+	}
 
 }
 func (a *AddrBook) genPubkey(privkey string) string {
-	pubkey, err := P2pComm.Pubkey(privkey)
-	if err != nil {
-		var maxRetry = 10
-		for i := 0; i < maxRetry; i++ {
-			pubkey, err = P2pComm.Pubkey(privkey)
-			if err == nil {
-				break
-			}
-			if i == maxRetry-1 && err != nil {
-				panic(err.Error())
-			}
+	maxRetry := 10
+	for i := 0; i < maxRetry; i++ {
+		pubkey, err := P2pComm.Pubkey(privkey)
+		if err == nil {
+			return pubkey
 		}
 	}
-
-	return pubkey
+	panic(fmt.Sprintf("get pubkey from privkey:%s failed", privkey))
 }
 
 // Returns false if file does not exist.
 // cmn.Panics if file is corrupt.
 
 func (a *AddrBook) loadDb() bool {
-	a.bookDb = db.NewDB("addrbook", a.cfg.Driver, a.cfg.DbPath, a.cfg.DbCache)
-	privkey, _ := a.bookDb.Get([]byte(privKeyTag))
-	if len(privkey) == 0 {
-		a.initKey()
-		privkey, _ := a.GetPrivPubKey()
-		a.bookDb.Set([]byte(privKeyTag), []byte(privkey))
-		return false
+	dbPath := a.p2pCfg.DbPath + "/" + manage.GossipTypeName
+	a.bookDb = db.NewDB("addrbook", a.p2pCfg.Driver, dbPath, a.p2pCfg.DbCache)
+	privkey, err := a.bookDb.Get([]byte(privKeyTag))
+	if len(privkey) != 0 && err == nil {
+		a.setKey(string(privkey), a.genPubkey(string(privkey)))
 	}
-
-	a.setKey(string(privkey), a.genPubkey(string(privkey)))
 
 	iteror := a.bookDb.Iterator(nil, nil, false)
 	for iteror.Next() {
@@ -243,7 +254,7 @@ func (a *AddrBook) loadDb() bool {
 			dec := json.NewDecoder(strings.NewReader(string(iteror.Value())))
 			err := dec.Decode(aJSON)
 			if err != nil {
-				log.Crit("Error reading file %s: %v", a.cfg.DbPath, err)
+				log.Crit("Error reading file %s: %v", a.p2pCfg.DbPath, err)
 			}
 
 			for _, ka := range aJSON.Addrs {
@@ -282,8 +293,9 @@ out:
 	log.Info("Address handler done")
 }
 
+// AddAddress add a address for ours
 // NOTE: addr must not be nil
-func (a *AddrBook) AddAddress(addr *NetAddress, ka *knownAddress) {
+func (a *AddrBook) AddAddress(addr *NetAddress, ka *KnownAddress) {
 
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -309,6 +321,7 @@ func (a *AddrBook) AddAddress(addr *NetAddress, ka *knownAddress) {
 
 }
 
+// RemoveAddr remove address
 func (a *AddrBook) RemoveAddr(peeraddr string) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -317,6 +330,7 @@ func (a *AddrBook) RemoveAddr(peeraddr string) {
 	}
 }
 
+// GetPeers return peerlist
 func (a *AddrBook) GetPeers() []*NetAddress {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -327,6 +341,7 @@ func (a *AddrBook) GetPeers() []*NetAddress {
 	return peerlist
 }
 
+// GetAddrs return addrlist
 func (a *AddrBook) GetAddrs() []string {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -341,22 +356,16 @@ func (a *AddrBook) GetAddrs() []string {
 
 func (a *AddrBook) initKey() {
 
-	priv, pub, err := P2pComm.GenPrivPubkey()
-	if err != nil {
-		var maxRetry = 10
-		for i := 0; i < maxRetry; i++ {
-			priv, pub, err = P2pComm.GenPrivPubkey()
-			if err == nil {
-				break
-			}
-			if i == maxRetry-1 && err != nil {
-				panic(err.Error())
-			}
+	maxRetry := 10
+	for i := 0; i < maxRetry; i++ {
+		priv, pub, err := P2pComm.GenPrivPubkey()
+		if err == nil {
+			a.setKey(hex.EncodeToString(priv), hex.EncodeToString(pub))
+			return
 		}
-
 	}
+	panic(fmt.Sprintf("p2p initPrivPubkey failed"))
 
-	a.setKey(hex.EncodeToString(priv), hex.EncodeToString(pub))
 }
 
 func (a *AddrBook) setKey(privkey, pubkey string) {
@@ -367,6 +376,21 @@ func (a *AddrBook) setKey(privkey, pubkey string) {
 
 }
 
+//ResetPeerkey reset priv,pub key
+func (a *AddrBook) ResetPeerkey(privkey, pubkey string) {
+
+	if privkey == "" || pubkey == "" {
+		a.initKey()
+		privkey, pubkey = a.GetPrivPubKey()
+	}
+	a.setKey(privkey, pubkey)
+	err := a.bookDb.Set([]byte(privKeyTag), []byte(privkey))
+	if err != nil {
+		panic(err)
+	}
+}
+
+// GetPrivPubKey return privkey and pubkey
 func (a *AddrBook) GetPrivPubKey() (string, string) {
 	a.keymtx.Lock()
 	defer a.keymtx.Unlock()

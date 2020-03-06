@@ -28,9 +28,9 @@ func init() {
 	cfg, sub := types.InitCfg(*configPath)
 	println(sub)
 	// change rpc bind address
-	cfg.Rpc.JrpcBindAddr = jrpcaddr
-	cfg.Rpc.GrpcBindAddr = grpcaddr
-	rpc.InitCfg(cfg.Rpc)
+	cfg.RPC.JrpcBindAddr = jrpcaddr
+	cfg.RPC.GrpcBindAddr = grpcaddr
+	rpc.InitCfg(cfg.RPC)
 	log.SetLogLevel("crit")
 }
 
@@ -56,26 +56,30 @@ type mockClient struct {
 	c queue.Client
 }
 
-func (mock *mockClient) Send(msg queue.Message, waitReply bool) error {
+func (mock *mockClient) Send(msg *queue.Message, waitReply bool) error {
 	if msg.Topic == "error" {
 		return types.ErrInvalidParam
 	}
 	return mock.c.Send(msg, waitReply)
 }
 
-func (mock *mockClient) SendTimeout(msg queue.Message, waitReply bool, timeout time.Duration) error {
+func (mock *mockClient) SendTimeout(msg *queue.Message, waitReply bool, timeout time.Duration) error {
 	return mock.c.SendTimeout(msg, waitReply, timeout)
 }
 
-func (mock *mockClient) Wait(msg queue.Message) (queue.Message, error) {
+func (mock *mockClient) Wait(msg *queue.Message) (*queue.Message, error) {
 	return mock.c.Wait(msg)
 }
 
-func (mock *mockClient) WaitTimeout(msg queue.Message, timeout time.Duration) (queue.Message, error) {
+func (mock *mockClient) Reply(msg *queue.Message) {
+	mock.c.Reply(msg)
+}
+
+func (mock *mockClient) WaitTimeout(msg *queue.Message, timeout time.Duration) (*queue.Message, error) {
 	return mock.c.WaitTimeout(msg, timeout)
 }
 
-func (mock *mockClient) Recv() chan queue.Message {
+func (mock *mockClient) Recv() chan *queue.Message {
 	return mock.c.Recv()
 }
 
@@ -92,8 +96,12 @@ func (mock *mockClient) CloseQueue() (*types.Reply, error) {
 	return &types.Reply{IsOk: true, Msg: []byte("Ok")}, nil
 }
 
-func (mock *mockClient) NewMessage(topic string, ty int64, data interface{}) queue.Message {
+func (mock *mockClient) NewMessage(topic string, ty int64, data interface{}) *queue.Message {
 	return mock.c.NewMessage(topic, ty, data)
+}
+
+func (mock *mockClient) GetConfig() *types.Chain33Config {
+	return mock.c.GetConfig()
 }
 
 func (mock *mockClient) Clone() queue.Client {
@@ -127,6 +135,7 @@ func (mock *mockQueue) Name() string {
 func (mock *mockSystem) startup(size int) client.QueueProtocolAPI {
 
 	var q = queue.New("channel")
+	q.SetConfig(types.NewChain33Config(types.GetDefaultCfgstring()))
 	queue := &mockQueue{q: q}
 	chain := &mockBlockChain{}
 	chain.SetQueueClient(q)
@@ -184,7 +193,7 @@ func (mock *mockSystem) getAPI() client.QueueProtocolAPI {
 
 type mockJRPCSystem struct {
 	japi *rpc.JSONRPCServer
-	ctx  *JsonRpcCtx
+	ctx  *JSONRPCCtx
 }
 
 func (mock *mockJRPCSystem) OnStartup(m *mockSystem) {
@@ -193,7 +202,10 @@ func (mock *mockJRPCSystem) OnStartup(m *mockSystem) {
 	ch := make(chan struct{}, 1)
 	go func() {
 		ch <- struct{}{}
-		mock.japi.Listen()
+		_, err := mock.japi.Listen()
+		if err != nil {
+			panic(err)
+		}
 	}()
 	<-ch
 	time.Sleep(time.Millisecond)
@@ -203,9 +215,9 @@ func (mock *mockJRPCSystem) OnStop() {
 	mock.japi.Close()
 }
 
-func (mock *mockJRPCSystem) newRpcCtx(methed string, params, res interface{}) error {
+func (mock *mockJRPCSystem) newRPCCtx(methed string, params, res interface{}) error {
 	if mock.ctx == nil {
-		mock.ctx = NewJsonRpcCtx(methed, params, res)
+		mock.ctx = NewJSONRPCCtx(methed, params, res)
 	} else {
 		mock.ctx.Method = methed
 		mock.ctx.Params = params
@@ -225,7 +237,10 @@ func (mock *mockGRPCSystem) OnStartup(m *mockSystem) {
 	ch := make(chan struct{}, 1)
 	go func() {
 		ch <- struct{}{}
-		mock.gapi.Listen()
+		_, err := mock.gapi.Listen()
+		if err != nil {
+			panic(err)
+		}
 	}()
 	<-ch
 	time.Sleep(time.Millisecond)
@@ -235,7 +250,7 @@ func (mock *mockGRPCSystem) OnStop() {
 	mock.gapi.Close()
 }
 
-func (mock *mockGRPCSystem) newRpcCtx(method string, param, res interface{}) error {
+func (mock *mockGRPCSystem) newRPCCtx(method string, param, res interface{}) error {
 	if mock.ctx == nil {
 		mock.ctx = NewGRpcCtx(method, param, res)
 	} else {

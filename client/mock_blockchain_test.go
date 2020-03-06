@@ -101,6 +101,17 @@ func (m *mockBlockChain) SetQueueClient(q queue.Queue) {
 				} else {
 					msg.ReplyErr("Do not support", types.ErrInvalidParam)
 				}
+
+			case types.EventGetSeqByHash:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.Int64{Data: 1}))
+			case types.EventGetBlockBySeq:
+				if req, ok := msg.GetData().(*types.Int64); ok {
+					// just for cover
+					if req.Data == 10 {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.Reply{IsOk: false, Msg: []byte("not support")}))
+					}
+					msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.BlockSeq{Num: 1}))
+				}
 			case types.EventIsSync:
 				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyIsSync, &types.IsCaughtUp{}))
 			case types.EventIsNtpClockSync:
@@ -118,15 +129,91 @@ func (m *mockBlockChain) SetQueueClient(q queue.Queue) {
 					msg.ReplyErr("Do not support", types.ErrInvalidParam)
 				}
 			case types.EventLocalList:
-				if req, ok := msg.GetData().(*types.LocalDBList); ok {
-					if len(req.Key) > 0 && bytes.Equal(req.Key, []byte("Statistics:TicketInfoOrder:Addr:case1")) {
-						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.TicketMinerInfo{}))
-					} else {
-						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.LocalReplyValue{}))
-					}
+				if _, ok := msg.GetData().(*types.LocalDBList); ok {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.LocalReplyValue{}))
 				} else {
 					msg.ReplyErr("Do not support", types.ErrInvalidParam)
 				}
+			case types.EventLocalNew:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventLocalNew, &types.Int64{Data: 9999}))
+			case types.EventLocalClose:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventLocalClose, nil))
+			case types.EventLocalBegin:
+				if req, ok := msg.GetData().(*types.Int64); ok && req.Data == 9999 {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventLocalBegin, nil))
+				} else {
+					msg.ReplyErr("transaction id must 9999", types.ErrInvalidParam)
+				}
+			case types.EventLocalCommit:
+				if req, ok := msg.GetData().(*types.Int64); ok && req.Data == 9999 {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventLocalCommit, nil))
+				} else {
+					msg.ReplyErr("transaction id must 9999", types.ErrInvalidParam)
+				}
+			case types.EventLocalRollback:
+				if req, ok := msg.GetData().(*types.Int64); ok && req.Data == 9999 {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventLocalRollback, nil))
+				} else {
+					msg.ReplyErr("transaction id must 9999", types.ErrInvalidParam)
+				}
+			case types.EventLocalSet:
+				if req, ok := msg.GetData().(*types.LocalDBSet); ok && req.Txid == 9999 {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventLocalSet, nil))
+				} else {
+					msg.ReplyErr("transaction id must 9999", types.ErrInvalidParam)
+				}
+			case types.EventGetMainSeqByHash:
+				if req, ok := msg.GetData().(*types.ReqHash); ok && string(req.Hash) == "exist-hash" {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventReplyMainSeqByHash, &types.Int64{Data: 9999}))
+				} else {
+					msg.ReplyErr("transaction hash is not exist-hash", types.ErrInvalidParam)
+				}
+			case types.EventGetLastBlockMainSequence:
+				if _, ok := msg.GetData().(*types.ReqNil); ok {
+					msg.Reply(client.NewMessage(blockchainKey, types.EventReplyLastBlockMainSequence, &types.Int64{Data: 9999}))
+				} else {
+					msg.ReplyErr("request must be nil", types.ErrInvalidParam)
+				}
+
+			case types.EventGetParaTxByTitle:
+				if req, ok := msg.GetData().(*types.ReqParaTxByTitle); ok {
+					// just for cover
+					if req.Title == "user" {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyParaTxByTitle, &types.Reply{IsOk: false, Msg: []byte("not support")}))
+					} else {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyParaTxByTitle, &types.ParaTxDetails{}))
+					}
+				}
+			case types.EventGetHeightByTitle:
+				if req, ok := msg.GetData().(*types.ReqHeightByTitle); ok {
+					// just for cover
+					if req.Title == "user" {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyHeightByTitle, &types.Reply{IsOk: false, Msg: []byte("not support")}))
+					} else {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyHeightByTitle, &types.ReplyHeightByTitle{}))
+					}
+				}
+			case types.EventGetParaTxByTitleAndHeight:
+				if req, ok := msg.GetData().(*types.ReqParaTxByHeight); ok {
+					// just for cover
+					if req.Title == "user" {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyParaTxByTitle, &types.Reply{IsOk: false, Msg: []byte("not support")}))
+					} else {
+						msg.Reply(client.NewMessage(blockchainKey, types.EventReplyParaTxByTitle, &types.ParaTxDetails{}))
+					}
+				}
+			case types.EventGetLastBlockSequence:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyLastBlockSequence, &types.Int64{}))
+			case types.EventGetBlockByHashes:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyLastBlockSequence, &types.BlockDetails{}))
+			case types.EventGetBlockSequences:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyBlockSequences, &types.BlockSequences{}))
+			case types.EventAddBlockSeqCB:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.ReplyAddSeqCallback{}))
+			case types.EventListBlockSeqCB:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.BlockSeqCBs{}))
+			case types.EventGetSeqCBLastNum:
+				msg.Reply(client.NewMessage(blockchainKey, types.EventReplyQuery, &types.Int64{}))
 			default:
 				msg.ReplyErr("Do not support", types.ErrNotSupport)
 			}

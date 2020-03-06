@@ -14,11 +14,13 @@ package btcutil
 // and http://stackoverflow.com/a/8392111/174463
 // for details on how this Koblitz curve math works.
 
-import "crypto/elliptic"
-import "fmt"
-import "math/big"
+import (
+	"crypto/elliptic"
+	"fmt"
+	"math/big"
+)
 
-// A Koblitz Curve with a=0.
+// KoblitzCurve A Koblitz Curve with a=0.
 type KoblitzCurve struct {
 	P       *big.Int // the order of the underlying field
 	N       *big.Int // the order of the base point
@@ -30,16 +32,29 @@ type KoblitzCurve struct {
 // Returns the secp256k1 curve.
 var secp256k1 *KoblitzCurve
 
+// Secp256k1 create curve object
 func Secp256k1() elliptic.Curve {
 	return secp256k1
 }
 
 func init() {
 	var p, n, gx, gy big.Int
-	fmt.Sscan("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F", &p)
-	fmt.Sscan("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", &n)
-	fmt.Sscan("0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798", &gx)
-	fmt.Sscan("0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8", &gy)
+	_, err := fmt.Sscan("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F", &p)
+	if err != nil {
+		return
+	}
+	_, err = fmt.Sscan("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", &n)
+	if err != nil {
+		return
+	}
+	_, err = fmt.Sscan("0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798", &gx)
+	if err != nil {
+		return
+	}
+	_, err = fmt.Sscan("0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8", &gy)
+	if err != nil {
+		return
+	}
 	b := big.NewInt(7)
 	secp256k1 = &KoblitzCurve{
 		P:       &p,
@@ -51,6 +66,7 @@ func init() {
 	}
 }
 
+// IsOnCurve check is on curve
 func (curve *KoblitzCurve) IsOnCurve(x, y *big.Int) bool {
 	// y² = x³ + b
 	y2 := new(big.Int).Mul(y, y)
@@ -79,6 +95,7 @@ func (curve *KoblitzCurve) affineFromJacobian(x, y, z *big.Int) (xOut, yOut *big
 	return
 }
 
+// Add add
 func (curve *KoblitzCurve) Add(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) {
 	z := new(big.Int).SetInt64(1)
 	return curve.affineFromJacobian(curve.addJacobian(x1, y1, z, x2, y2, z))
@@ -149,6 +166,7 @@ func (curve *KoblitzCurve) addJacobian(x1, y1, z1, x2, y2, z2 *big.Int) (*big.In
 	return x3, y3, z3
 }
 
+// Double double
 func (curve *KoblitzCurve) Double(x1, y1 *big.Int) (*big.Int, *big.Int) {
 	z1 := new(big.Int).SetInt64(1)
 	return curve.affineFromJacobian(curve.doubleJacobian(x1, y1, z1))
@@ -188,6 +206,7 @@ func (curve *KoblitzCurve) doubleJacobian(x, y, z *big.Int) (*big.Int, *big.Int,
 	return x3, y3, z3
 }
 
+// ScalarMult scalar multiple
 func (curve *KoblitzCurve) ScalarMult(Bx, By *big.Int, k []byte) (*big.Int, *big.Int) {
 	// We have a slight problem in that the identity of the group (the
 	// point at infinity) cannot be represented in (x, y) form on a finite
@@ -226,10 +245,12 @@ func (curve *KoblitzCurve) ScalarMult(Bx, By *big.Int, k []byte) (*big.Int, *big
 	return curve.affineFromJacobian(x, y, z)
 }
 
+// ScalarBaseMult multiple
 func (curve *KoblitzCurve) ScalarBaseMult(k []byte) (*big.Int, *big.Int) {
 	return curve.ScalarMult(curve.Gx, curve.Gy, k)
 }
 
+// Params 获取参数列表
 func (curve *KoblitzCurve) Params() *elliptic.CurveParams {
 	return &elliptic.CurveParams{
 		P:       curve.P,

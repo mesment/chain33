@@ -9,9 +9,12 @@ import (
 	"github.com/33cn/chain33/types"
 )
 
-//通过记录的block序列号获取blockd序列存储的信息
+//GetBlockSequences 通过记录的block序列号获取blockd序列存储的信息
 func (chain *BlockChain) GetBlockSequences(requestblock *types.ReqBlocks) (*types.BlockSequences, error) {
-	blockLastSeq, _ := chain.blockStore.LoadBlockLastSequence()
+	blockLastSeq, err := chain.blockStore.LoadBlockLastSequence()
+	if err != nil {
+		chainlog.Debug("GetBlockSequences LoadBlockLastSequence", "blockLastSeq", blockLastSeq, "err", err)
+	}
 	if requestblock.Start > blockLastSeq {
 		chainlog.Error("GetBlockSequences StartSeq err", "startSeq", requestblock.Start, "lastSeq", blockLastSeq)
 		return nil, types.ErrStartHeight
@@ -20,7 +23,9 @@ func (chain *BlockChain) GetBlockSequences(requestblock *types.ReqBlocks) (*type
 		chainlog.Error("GetBlockSequences input must Start <= End:", "startSeq", requestblock.Start, "endSeq", requestblock.End)
 		return nil, types.ErrEndLessThanStartHeight
 	}
-
+	if requestblock.End-requestblock.Start >= types.MaxBlockCountPerTime {
+		return nil, types.ErrMaxCountPerTime
+	}
 	end := requestblock.End
 	if requestblock.End > blockLastSeq {
 		end = blockLastSeq
@@ -43,8 +48,9 @@ func (chain *BlockChain) GetBlockSequences(requestblock *types.ReqBlocks) (*type
 	return &blockSequences, nil
 }
 
-//处理共识过来的删除block的消息，目前只提供给平行链使用
+//ProcDelParaChainBlockMsg 处理共识过来的删除block的消息，目前只提供给平行链使用
 func (chain *BlockChain) ProcDelParaChainBlockMsg(broadcast bool, ParaChainblockdetail *types.ParaChainBlockDetail, pid string) (err error) {
+	cfg := chain.client.GetConfig()
 	if ParaChainblockdetail == nil || ParaChainblockdetail.GetBlockdetail() == nil || ParaChainblockdetail.GetBlockdetail().GetBlock() == nil {
 		chainlog.Error("ProcDelParaChainBlockMsg input block is null")
 		return types.ErrInvalidParam
@@ -54,13 +60,14 @@ func (chain *BlockChain) ProcDelParaChainBlockMsg(broadcast bool, ParaChainblock
 	sequence := ParaChainblockdetail.GetSequence()
 
 	_, ismain, isorphan, err := chain.ProcessBlock(broadcast, blockdetail, pid, false, sequence)
-	chainlog.Debug("ProcDelParaChainBlockMsg result:", "height", block.Height, "sequence", sequence, "ismain", ismain, "isorphan", isorphan, "hash", common.ToHex(block.Hash()), "err", err)
+	chainlog.Debug("ProcDelParaChainBlockMsg result:", "height", block.Height, "sequence", sequence, "ismain", ismain, "isorphan", isorphan, "hash", common.ToHex(block.Hash(cfg)), "err", err)
 
 	return err
 }
 
-//处理共识过来的add block的消息，目前只提供给平行链使用
+//ProcAddParaChainBlockMsg 处理共识过来的add block的消息，目前只提供给平行链使用
 func (chain *BlockChain) ProcAddParaChainBlockMsg(broadcast bool, ParaChainblockdetail *types.ParaChainBlockDetail, pid string) (*types.BlockDetail, error) {
+	cfg := chain.client.GetConfig()
 	if ParaChainblockdetail == nil || ParaChainblockdetail.GetBlockdetail() == nil || ParaChainblockdetail.GetBlockdetail().GetBlock() == nil {
 		chainlog.Error("ProcAddParaChainBlockMsg input block is null")
 		return nil, types.ErrInvalidParam
@@ -70,12 +77,12 @@ func (chain *BlockChain) ProcAddParaChainBlockMsg(broadcast bool, ParaChainblock
 	sequence := ParaChainblockdetail.GetSequence()
 
 	fullBlockDetail, ismain, isorphan, err := chain.ProcessBlock(broadcast, blockdetail, pid, true, sequence)
-	chainlog.Debug("ProcAddParaChainBlockMsg result:", "height", block.Height, "sequence", sequence, "ismain", ismain, "isorphan", isorphan, "hash", common.ToHex(block.Hash()), "err", err)
+	chainlog.Debug("ProcAddParaChainBlockMsg result:", "height", block.Height, "sequence", sequence, "ismain", ismain, "isorphan", isorphan, "hash", common.ToHex(block.Hash(cfg)), "err", err)
 
 	return fullBlockDetail, err
 }
 
-//处理共识过来的通过blockhash获取seq的消息，只提供add block时的seq，用于平行链block回退
+//ProcGetSeqByHash 处理共识过来的通过blockhash获取seq的消息，只提供add block时的seq，用于平行链block回退
 func (chain *BlockChain) ProcGetSeqByHash(hash []byte) (int64, error) {
 	if len(hash) == 0 {
 		chainlog.Error("ProcGetSeqByHash input hash is null")
@@ -83,6 +90,18 @@ func (chain *BlockChain) ProcGetSeqByHash(hash []byte) (int64, error) {
 	}
 	seq, err := chain.blockStore.GetSequenceByHash(hash)
 	chainlog.Debug("ProcGetSeqByHash", "blockhash", common.ToHex(hash), "seq", seq, "err", err)
+
+	return seq, err
+}
+
+//ProcGetMainSeqByHash 处理共识过来的通过blockhash获取seq的消息，只提供add block时的seq，用于平行链block回退
+func (chain *BlockChain) ProcGetMainSeqByHash(hash []byte) (int64, error) {
+	if len(hash) == 0 {
+		chainlog.Error("ProcGetMainSeqByHash input hash is null")
+		return -1, types.ErrInvalidParam
+	}
+	seq, err := chain.blockStore.GetMainSequenceByHash(hash)
+	chainlog.Debug("ProcGetMainSeqByHash", "blockhash", common.ToHex(hash), "seq", seq, "err", err)
 
 	return seq, err
 }

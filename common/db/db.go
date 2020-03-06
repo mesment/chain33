@@ -2,38 +2,49 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package db 数据库操作底层接口定义以及实现包括：leveldb、
+// memdb、mvcc、badgerdb、pegasus、ssdb
 package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 
 	"github.com/33cn/chain33/types"
 	lru "github.com/hashicorp/golang-lru"
 )
 
-var ErrNotFoundInDb = errors.New("ErrNotFoundInDb")
+//ErrNotFoundInDb error
+var ErrNotFoundInDb = types.ErrNotFound
 
+//Lister 列表接口
 type Lister interface {
 	List(prefix, key []byte, count, direction int32) ([][]byte, error)
 	PrefixCount(prefix []byte) int64
 }
 
-type KV interface {
-	Get(key []byte) ([]byte, error)
-	BatchGet(keys [][]byte) (values [][]byte, err error)
-	Set(key []byte, value []byte) (err error)
-	Begin()
-	Rollback()
-	Commit()
+//TxKV transaction Key Value
+type TxKV interface {
+	KV
+	IteratorDB
 }
 
+//KV kv
+type KV interface {
+	Get(key []byte) ([]byte, error)
+	Set(key []byte, value []byte) (err error)
+	Begin()
+	Commit() error
+	Rollback()
+}
+
+//KVDB kvdb
 type KVDB interface {
 	KV
 	Lister
 }
 
+//DB db
 type DB interface {
 	KV
 	IteratorDB
@@ -42,6 +53,8 @@ type DB interface {
 	DeleteSync([]byte) error
 	Close()
 	NewBatch(sync bool) Batch
+	BeginTx() (TxKV, error)
+	CompactRange(start, limit []byte) error
 	// For debugging
 	Print()
 	Stats() map[string]string
@@ -49,11 +62,13 @@ type DB interface {
 	GetCache() *lru.ARCCache
 }
 
+//KVDBList list
 type KVDBList struct {
 	DB
 	list *ListHelper
 }
 
+//List 列表
 func (l *KVDBList) List(prefix, key []byte, count, direction int32) ([][]byte, error) {
 	vals := l.list.List(prefix, key, count, direction)
 	if vals == nil {
@@ -62,28 +77,43 @@ func (l *KVDBList) List(prefix, key []byte, count, direction int32) ([][]byte, e
 	return vals, nil
 }
 
+//PrefixCount 前缀长度
 func (l *KVDBList) PrefixCount(prefix []byte) int64 {
 	return l.list.PrefixCount(prefix)
 }
 
+//NewKVDB new
 func NewKVDB(db DB) KVDB {
 	return &KVDBList{DB: db, list: NewListHelper(db)}
 }
 
+//Batch batch
 type Batch interface {
 	Set(key, value []byte)
 	Delete(key []byte)
 	Write() error
-	ValueSize() int // amount of data in the batch
+	ValueSize() int // size of data in the batch
+	ValueLen() int  // amount of data in the batch
 	Reset()         // Reset resets the batch for reuse
 }
 
+// MustWrite must write correct
+func MustWrite(batch Batch) {
+	err := batch.Write()
+	if err != nil {
+		panic(fmt.Sprint("batch write err", err))
+	}
+}
+
+//IteratorSeeker ...
 type IteratorSeeker interface {
 	Rewind() bool
+	// 返回false， 表示系统中没有指定的key，Iterator会指向key附近
 	Seek(key []byte) bool
 	Next() bool
 }
 
+//Iterator 迭代器
 type Iterator interface {
 	IteratorSeeker
 	Valid() bool
@@ -92,6 +122,7 @@ type Iterator interface {
 	ValueCopy() []byte
 	Error() error
 	Prefix() []byte
+	IsReverse() bool
 	Close()
 }
 
@@ -115,10 +146,16 @@ func (it *itBase) checkKey(key []byte) bool {
 	return ok
 }
 
+//Prefix 前缀
 func (it *itBase) Prefix() []byte {
 	return nil
 }
 
+func (it *itBase) IsReverse() bool {
+	return it.reverse
+}
+
+//IteratorDB 迭代
 type IteratorDB interface {
 	Iterator(start []byte, end []byte, reserver bool) Iterator
 }
@@ -158,6 +195,7 @@ func registerDBCreator(backend string, creator dbCreator, force bool) {
 	backends[backend] = creator
 }
 
+//NewDB new
 func NewDB(name string, backend string, dir string, cache int32) DB {
 	dbCreator, ok := backends[backend]
 	if !ok {
@@ -172,29 +210,49 @@ func NewDB(name string, backend string, dir string, cache int32) DB {
 	return db
 }
 
-type TransactionDB struct {
+//BaseDB 交易缓存
+type BaseDB struct {
 	cache *lru.ARCCache
 }
 
-func (db *TransactionDB) Begin() {
-
-}
-
-func (db *TransactionDB) Rollback() {
-
-}
-
-func (db *TransactionDB) Commit() {
-
-}
-
-func (db *TransactionDB) GetCache() *lru.ARCCache {
+//GetCache 获取缓存
+func (db *BaseDB) GetCache() *lru.ARCCache {
 	return db.cache
 }
 
-func (db *TransactionDB) SetCacheSize(size int) {
+//SetCacheSize 设置缓存大小
+func (db *BaseDB) SetCacheSize(size int) {
 	if db.cache != nil {
 		return
 	}
-	db.cache, _ = lru.NewARC(size)
+	var err error
+	db.cache, err = lru.NewARC(size)
+	if err != nil {
+		panic(err)
+	}
+}
+
+//Begin call panic when Begin not rewrite
+func (db *BaseDB) Begin() {
+	panic("Begin not impl")
+}
+
+//Commit call panic when Commit not rewrite
+func (db *BaseDB) Commit() error {
+	panic("Commit not impl")
+}
+
+//Rollback call panic when Rollback not rewrite
+func (db *BaseDB) Rollback() {
+	panic("Rollback not impl")
+}
+
+//BeginTx call panic when BeginTx not rewrite
+func (db *BaseDB) BeginTx() (TxKV, error) {
+	panic("BeginTx not impl")
+}
+
+//CompactRange call panic when CompactRange not rewrite
+func (db *BaseDB) CompactRange(start, limit []byte) error {
+	panic("CompactRange not impl")
 }

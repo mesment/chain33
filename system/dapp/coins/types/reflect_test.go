@@ -14,7 +14,8 @@ import (
 func TestMethodCall(t *testing.T) {
 	action := &CoinsAction{Value: &CoinsAction_Transfer{Transfer: &types.AssetsTransfer{}}}
 	funclist := types.ListMethod(action)
-	name, ty, v := types.GetActionValue(action, funclist)
+	name, ty, v, err := types.GetActionValue(action, funclist)
+	assert.Nil(t, err)
 	assert.Equal(t, int32(0), ty)
 	assert.Equal(t, "Transfer", name)
 	assert.Equal(t, &types.AssetsTransfer{}, v.Interface())
@@ -33,8 +34,9 @@ func TestListMethod(t *testing.T) {
 
 func TestListType(t *testing.T) {
 	excpect := []string{"Value_Withdraw", "Withdraw", "Value_Transfer", "Value_Genesis", "Value_TransferToExec"}
+	cfg := types.NewChain33Config(types.GetDefaultCfgstring())
 	for _, v := range excpect {
-		if _, ok := NewType().GetValueTypeMap()[v]; !ok {
+		if _, ok := NewType(cfg).GetValueTypeMap()[v]; !ok {
 			t.Error(v + " is not in list")
 		}
 	}
@@ -42,8 +44,33 @@ func TestListType(t *testing.T) {
 func BenchmarkGetActionValue(b *testing.B) {
 	action := &CoinsAction{Value: &CoinsAction_Transfer{Transfer: &types.AssetsTransfer{}}}
 	funclist := types.ListMethod(action)
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, v := types.GetActionValue(action, funclist)
-		assert.NotNil(b, v)
+		action, ty, _, _ := types.GetActionValue(action, funclist)
+		if action != "Transfer" || ty != 0 {
+			b.Fatal(action)
+		}
+	}
+}
+func BenchmarkDecodePayload(b *testing.B) {
+	action := &CoinsAction{Value: &CoinsAction_Transfer{Transfer: &types.AssetsTransfer{}}}
+	payload := types.Encode(action)
+	tx := &types.Transaction{Payload: payload}
+	ty := NewType(types.NewChain33Config(types.GetDefaultCfgstring()))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ty.DecodePayload(tx)
+	}
+}
+
+func BenchmarkDecodePayloadValue(b *testing.B) {
+	b.ReportAllocs()
+	action := &CoinsAction{Value: &CoinsAction_Transfer{Transfer: &types.AssetsTransfer{}}, Ty: CoinsActionTransfer}
+	payload := types.Encode(action)
+	tx := &types.Transaction{Payload: payload}
+	ty := NewType(types.NewChain33Config(types.GetDefaultCfgstring()))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ty.DecodePayloadValue(tx)
 	}
 }

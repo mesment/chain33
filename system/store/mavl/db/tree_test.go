@@ -10,15 +10,18 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
+	"os"
 	"sort"
+	"sync"
 	"testing"
 
-	"os"
+	"unsafe"
 
 	. "github.com/33cn/chain33/common"
 	"github.com/33cn/chain33/common/db"
 	"github.com/33cn/chain33/common/log"
 	"github.com/33cn/chain33/types"
+	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +63,7 @@ func randstr(length int) string {
 }
 
 func RandInt32() uint32 {
-	return uint32(rand.Uint32())
+	return rand.Uint32()
 }
 
 func i2b(i int32) []byte {
@@ -69,16 +72,9 @@ func i2b(i int32) []byte {
 	return Sha256(bbuf.Bytes())
 }
 
-func b2i(bz []byte) int {
-	var x int
-	bbuf := bytes.NewBuffer(bz)
-	binary.Read(bbuf, binary.BigEndian, &x)
-	return x
-}
-
 // 测试set和get功能
 func TestBasic(t *testing.T) {
-	var tree = NewTree(nil, true)
+	var tree = NewTree(nil, true, nil)
 	up := tree.Set([]byte("1"), []byte("one"))
 	if up {
 		t.Error("Did not expect an update (should have been create)")
@@ -173,7 +169,7 @@ func TestTreeHeightAndSize(t *testing.T) {
 	}
 
 	// Construct some tree and save it
-	t1 := NewTree(db, true)
+	t1 := NewTree(db, true, nil)
 
 	for key, value := range records {
 		t1.Set([]byte(key), []byte(value))
@@ -202,7 +198,7 @@ func TestSetAndGetOld(t *testing.T) {
 	require.NoError(t, err)
 	t.Log(dir)
 	dbm := db.NewDB("mavltree", "leveldb", dir, 100)
-	t1 := NewTree(dbm, true)
+	t1 := NewTree(dbm, true, nil)
 	t1.Set([]byte("1"), []byte("1"))
 	t1.Set([]byte("2"), []byte("2"))
 
@@ -210,13 +206,13 @@ func TestSetAndGetOld(t *testing.T) {
 	t1.Save()
 
 	//t2 在t1的基础上再做修改
-	t2 := NewTree(dbm, true)
+	t2 := NewTree(dbm, true, nil)
 	t2.Load(hash)
 	t2.Set([]byte("2"), []byte("22"))
 	hash = t2.Hash()
 	t2.Save()
 
-	t3 := NewTree(dbm, true)
+	t3 := NewTree(dbm, true, nil)
 	t3.Load(hash)
 	_, v, _ := t3.Get([]byte("1"))
 	assert.Equal(t, []byte("1"), v)
@@ -232,18 +228,18 @@ func TestHashSame(t *testing.T) {
 	t.Log(dir)
 	dbm := db.NewDB("mavltree", "leveldb", dir, 100)
 
-	t1 := NewTree(dbm, true)
+	t1 := NewTree(dbm, true, nil)
 	t1.Set([]byte("1"), []byte("1"))
 	t1.Set([]byte("2"), []byte("2"))
 
 	hash1 := t1.Hash()
 
-	EnableMVCC(true)
-	defer EnableMVCC(false)
-	EnableMavlPrefix(true)
-	defer EnableMavlPrefix(false)
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMVCC:       true,
+	}
 	//t2 在t1的基础上再做修改
-	t2 := NewTree(dbm, true)
+	t2 := NewTree(dbm, true, treeCfg)
 	t2.Set([]byte("1"), []byte("1"))
 	t2.Set([]byte("2"), []byte("2"))
 	hash2 := t2.Hash()
@@ -259,23 +255,25 @@ func TestHashSame2(t *testing.T) {
 	prevHash := make([]byte, 32)
 	strs1 := make(map[string]bool)
 	for i := 0; i < 5; i++ {
-		prevHash, err = saveBlock(db1, int64(i), prevHash, 1000, false)
+		prevHash, err = saveBlock(db1, int64(i), prevHash, 1000, false, nil)
 		assert.Nil(t, err)
-		str := Bytes2Hex(prevHash)
+		str := ToHex(prevHash)
 		fmt.Println("unable", str)
 		strs1[str] = true
 	}
 
 	db2 := db.NewDB("test2", "leveldb", dir, 100)
 	prevHash = prevHash[:0]
-	EnableMVCC(true)
-	defer EnableMVCC(false)
-	EnableMavlPrefix(true)
-	defer EnableMavlPrefix(false)
+
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMVCC:       true,
+	}
+
 	for i := 0; i < 5; i++ {
-		prevHash, err = saveBlock(db2, int64(i), prevHash, 1000, false)
+		prevHash, err = saveBlock(db2, int64(i), prevHash, 1000, false, treeCfg)
 		assert.Nil(t, err)
-		str := Bytes2Hex(prevHash)
+		str := ToHex(prevHash)
 		fmt.Println("enable", str)
 		if ok := strs1[str]; !ok {
 			t.Error("enable Prefix have a different hash")
@@ -300,9 +298,10 @@ func TestPersistence(t *testing.T) {
 		records[randstr(20)] = randstr(20)
 	}
 
+	enableMvcc := false
 	mvccdb := db.NewMVCC(dbm)
 
-	t1 := NewTree(dbm, true)
+	t1 := NewTree(dbm, true, nil)
 
 	for key, value := range records {
 		//t1.Set([]byte(key), []byte(value))
@@ -317,7 +316,7 @@ func TestPersistence(t *testing.T) {
 	t.Log("TestPersistence", "roothash1", hash)
 
 	// Load a tree
-	t2 := NewTree(dbm, true)
+	t2 := NewTree(dbm, true, nil)
 	t2.Load(hash)
 
 	for key, value := range records {
@@ -347,7 +346,7 @@ func TestPersistence(t *testing.T) {
 
 	// 重新加载hash
 
-	t11 := NewTree(dbm, true)
+	t11 := NewTree(dbm, true, nil)
 	t11.Load(hash)
 
 	t.Log("------tree11------TestPersistence---------")
@@ -359,7 +358,7 @@ func TestPersistence(t *testing.T) {
 		}
 	}
 	//重新加载hash2
-	t22 := NewTree(dbm, true)
+	t22 := NewTree(dbm, true, nil)
 	t22.Load(hash2)
 	t.Log("------tree22------TestPersistence---------")
 
@@ -368,7 +367,7 @@ func TestPersistence(t *testing.T) {
 		//_, t2value, _ := t22.Get([]byte(key))
 		_, t2value, _ := kindsGet(t22, mvccdb, []byte(key), 0, enableMvcc)
 		if string(t2value) != value {
-			t.Log("tree22 value update.", "oldvalue", string(value), "newvalue", string(t2value), "key", string(key))
+			t.Log("tree22 value update.", "oldvalue", value, "newvalue", string(t2value), "key", key)
 		}
 	}
 	count = 0
@@ -380,7 +379,7 @@ func TestPersistence(t *testing.T) {
 		//_, t2value, _ := t22.Get([]byte(key))
 		_, t2value, _ := kindsGet(t22, mvccdb, []byte(key), 1, enableMvcc)
 		if string(t2value) != value {
-			t.Logf("tree2222 Invalid value. Expected %v, got %v,key %v", string(value), string(t2value), string(key))
+			t.Logf("tree2222 Invalid value. Expected %v, got %v,key %v", value, string(t2value), key)
 		}
 	}
 	dbm.Close()
@@ -423,7 +422,7 @@ func TestIAVLProof(t *testing.T) {
 
 	db := db.NewDB("mavltree", "leveldb", dir, 100)
 
-	var tree = NewTree(db, true)
+	var tree = NewTree(db, true, nil)
 
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("TestIAVLProof key:%d!", i)
@@ -470,7 +469,7 @@ func TestIAVLProof(t *testing.T) {
 	}
 
 	t.Log("TestIAVLProof test Persistence data----------------")
-	tree = NewTree(db, true)
+	tree = NewTree(db, true, nil)
 
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("TestIAVLProof key:%d!", i)
@@ -573,19 +572,19 @@ func TestSetAndGetKVPair(t *testing.T) {
 	}
 	// storeSet hash is nil
 	storeSet.StateHash = emptyRoot[:]
-	newhash, err := SetKVPair(db, &storeSet, true)
+	newhash, err := SetKVPair(db, &storeSet, true, nil)
 	assert.Nil(t, err)
 	//打印指定roothash的tree
 	t.Log("TestSetAndGetKVPair newhash tree")
-	PrintTreeLeaf(db, newhash)
+	PrintTreeLeaf(db, newhash, nil)
 
 	//删除5个节点
 	storeDel.StateHash = newhash
-	delhash, _, err := DelKVPair(db, &storeDel)
+	delhash, _, err := DelKVPair(db, &storeDel, nil)
 	assert.Nil(t, err)
 	//打印指定roothash的tree
 	t.Log("TestSetAndGetKVPair delhash tree")
-	PrintTreeLeaf(db, delhash)
+	PrintTreeLeaf(db, delhash, nil)
 
 	// 在原来的基础上再次插入10个节点
 
@@ -614,16 +613,16 @@ func TestSetAndGetKVPair(t *testing.T) {
 	}
 	// storeSet hash is newhash
 	storeSet2.StateHash = delhash
-	newhash2, err := SetKVPair(db, &storeSet2, true)
+	newhash2, err := SetKVPair(db, &storeSet2, true, nil)
 	assert.Nil(t, err)
 	t.Log("TestSetAndGetKVPair newhash2 tree")
-	PrintTreeLeaf(db, newhash2)
+	PrintTreeLeaf(db, newhash2, nil)
 
 	t.Log("TestSetAndGetKVPair delhash tree again !!!")
-	PrintTreeLeaf(db, delhash)
+	PrintTreeLeaf(db, delhash, nil)
 
 	t.Log("TestSetAndGetKVPair newhash tree again !!!")
-	PrintTreeLeaf(db, newhash)
+	PrintTreeLeaf(db, newhash, nil)
 	db.Close()
 }
 
@@ -659,13 +658,12 @@ func TestGetAndVerifyKVPairProof(t *testing.T) {
 	}
 	// storeSet hash is nil
 	storeSet.StateHash = emptyRoot[:]
-	newhash, err := SetKVPair(db, &storeSet, true)
+	newhash, err := SetKVPair(db, &storeSet, true, nil)
 	assert.Nil(t, err)
-	i = 0
 	for i = 0; i < total; i++ {
 		var keyvalue types.KeyValue
 
-		proof, err := GetKVPairProof(db, newhash, storeGet.Keys[i])
+		proof, err := GetKVPairProof(db, newhash, storeGet.Keys[i], nil)
 		assert.Nil(t, err)
 		keyvalue.Key = storeGet.Keys[i]
 		keyvalue.Value = []byte(records[string(storeGet.Keys[i])])
@@ -693,7 +691,7 @@ func TestIterateRange(t *testing.T) {
 	t.Log(dir)
 
 	db := db.NewDB("mavltree", "leveldb", dir, 100)
-	tree := NewTree(db, true)
+	tree := NewTree(db, true, nil)
 
 	type record struct {
 		key   string
@@ -772,7 +770,7 @@ func TestIAVLPrint(t *testing.T) {
 	t.Log(dir)
 	dbm := db.NewDB("test", "leveldb", dir, 100)
 	prevHash := make([]byte, 32)
-	tree := NewTree(dbm, true)
+	tree := NewTree(dbm, true, nil)
 	tree.Load(prevHash)
 	PrintNode(tree.root)
 	kvs := genKVShort(0, 10)
@@ -797,26 +795,25 @@ func TestPruningTree(t *testing.T) {
 	db := db.NewDB("test", "leveldb", dir, 100)
 	prevHash := make([]byte, 32)
 
-	EnableMavlPrefix(true)
-	defer EnableMavlPrefix(false)
-	EnablePrune(true)
-	defer EnablePrune(false)
-	SetPruneHeight(preDel)
-	defer SetPruneHeight(0)
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+		PruneHeight:      preDel,
+	}
 
 	for j := 0; j < round; j++ {
 		for i := 0; i < preB; i++ {
 			setPruning(pruningStateStart)
-			prevHash, err = saveUpdateBlock(db, int64(i), prevHash, txN, j, int64(j*preB+i))
+			prevHash, err = saveUpdateBlock(db, int64(i), prevHash, txN, j, int64(j*preB+i), treeCfg)
 			assert.Nil(t, err)
 			m := int64(j*preB + i)
 			if m/int64(preDel) > 1 && m%int64(preDel) == 0 {
-				pruningTree(db, m)
+				pruningTree(db, m, treeCfg)
 			}
 		}
 		fmt.Printf("round %d over \n", j)
 	}
-	te := NewTree(db, true)
+	te := NewTree(db, true, treeCfg)
 	err = te.Load(prevHash)
 	if err == nil {
 		fmt.Printf("te.Load \n")
@@ -845,8 +842,8 @@ func genUpdateKV(height int64, txN int64, vIndex int) (kvs []*types.KeyValue) {
 	return kvs
 }
 
-func saveUpdateBlock(dbm db.DB, height int64, hash []byte, txN int64, vIndex int, blockHeight int64) (newHash []byte, err error) {
-	t := NewTree(dbm, true)
+func saveUpdateBlock(dbm db.DB, height int64, hash []byte, txN int64, vIndex int, blockHeight int64, treeCfg *TreeConfig) (newHash []byte, err error) {
+	t := NewTree(dbm, true, treeCfg)
 	t.Load(hash)
 	t.SetBlockHeight(blockHeight)
 	kvs := genUpdateKV(height, txN, vIndex)
@@ -875,7 +872,7 @@ func TestMaxLevalDbValue(t *testing.T) {
 	}
 }
 
-func TestPruningHashNode(t *testing.T) {
+func TestGetHash(t *testing.T) {
 	//开启前缀时候需要加入在叶子节点hash上加入：5f6d625f2d303030303030303030302d
 	/* 叶子节点对应hash值
 			k:abc     v:abc     hash:0xd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d
@@ -888,7 +885,6 @@ func TestPruningHashNode(t *testing.T) {
 		    k:food    v:food    hash:0xe5080908c794168285a090088ae892793d549f3e7069f4feae3677bf3a28ad39
 		    k:good    v:good    hash:0x0c99238587914476198da04cbb1555d092f813eaf2e796893084406290188776
 		    k:low     v:low     hash:0x5a82d9685c0627c94ac5ba13e819c60e05b577bf6512062cf3dc2b5d9b381786
-
 	        height:0 hash:d95f left: right: parentHash:967b
 	        height:0 hash:3bf2 left: right: parentHash:cf1e
 			height:0 hash:0ac6 left: right: parentHash:cf1e
@@ -913,14 +909,10 @@ func TestPruningHashNode(t *testing.T) {
 	dir, err := ioutil.TempDir("", "datastore")
 	require.NoError(t, err)
 	t.Log(dir)
-
-	EnableMavlPrefix(true)
-	defer EnableMavlPrefix(false)
-	EnablePrune(true)
-	defer EnablePrune(false)
+	defer os.Remove(dir)
 
 	db := db.NewDB("mavltree", "leveldb", dir, 100)
-	tree := NewTree(db, true)
+	tree := NewTree(db, true, nil)
 
 	type record struct {
 		key   string
@@ -933,10 +925,10 @@ func TestPruningHashNode(t *testing.T) {
 		{"foo", "foo"},
 		{"foobaz", "foobaz"},
 		{"good", "good"},
-		//{"foobang", "foobang"},
-		//{"foobar", "foobar"},
-		//{"food", "food"},
-		//{"foml", "foml"},
+		{"foobang", "foobang"},
+		{"foobar", "foobar"},
+		{"food", "food"},
+		{"foml", "foml"},
 	}
 
 	keys := make([]string, len(records))
@@ -952,27 +944,49 @@ func TestPruningHashNode(t *testing.T) {
 		}
 	}
 	hash := tree.Save()
+	//加入前缀的叶子节点
+	expecteds := []record{
+		{"abc", "0xd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d"},
+		{"low", "0x5a82d9685c0627c94ac5ba13e819c60e05b577bf6512062cf3dc2b5d9b381786"},
+		{"fan", "0x3bf26d01cb0752bcfd60b72348a8fde671f32f51ec276606cd5f35658c172114"},
+		{"foo", "0x890d4f4450d5ea213b8e63aae98fae548f210b5c8d3486b685cfa86adde16ec2"},
 
-	tree1 := NewTree(db, true)
-	tree1.Load(hash)
-	records1 := []record{
-		{"abc", "abc1"},
-		{"low", "low1"},
-		{"fan", "fan1"},
-		{"foo", "foo1"},
-		//新增
-		{"foobang", "foobang"},
-		{"foobar", "foobar"},
-		{"food", "food"},
-		{"foml", "foml"},
+		{"foml", "0x0ac69b0f4ceee514d09f2816e387cda870c06be28b50bf416de5c0ba90cdfbc0"},
+		{"foobang", "0x6d46d71882171840bcb61f2b60b69c904a4c30435bf03e63f4ec36bfa47ab2be"},
+		{"foobar", "0x5308d1f9b60e831a5df663babbf2a2636ecaf4da3bffed52447faf5ab172cf93"},
+		{"foobaz", "0xcbcb48848f0ce209cfccdf3ddf80740915c9bdede3cb11d0378690ad8b85a68b"},
+		{"food", "0xe5080908c794168285a090088ae892793d549f3e7069f4feae3677bf3a28ad39"},
+		{"good", "0x0c99238587914476198da04cbb1555d092f813eaf2e796893084406290188776"},
 	}
-	for _, r := range records1 {
-		tree1.Set([]byte(r.key), []byte(r.value))
+
+	tr := NewTree(db, true, nil)
+	tr.Load(hash)
+	for _, val := range expecteds {
+		_, hash, exists := tr.GetHash([]byte(val.key))
+		if exists {
+			require.Equal(t, ToHex(hash), val.value)
+		}
+	}
+	for _, val := range expecteds {
+		val.value = "1111"
+	}
+
+	//开启前缀
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+	}
+
+	tree1 := NewTree(db, true, treeCfg)
+	for _, r := range records {
+		updated := tree1.Set([]byte(r.key), []byte(r.value))
+		if updated {
+			t.Error("should have not been updated")
+		}
 	}
 	hash1 := tree1.Save()
 
-	//加入前缀的叶子节点
-	keyLeafs := []record{
+	expecteds = []record{
 		{"abc", "0x5f6d625f2d303030303030303030302dd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d"},
 		{"low", "0x5f6d625f2d303030303030303030302d5a82d9685c0627c94ac5ba13e819c60e05b577bf6512062cf3dc2b5d9b381786"},
 		{"fan", "0x5f6d625f2d303030303030303030302d3bf26d01cb0752bcfd60b72348a8fde671f32f51ec276606cd5f35658c172114"},
@@ -985,40 +999,870 @@ func TestPruningHashNode(t *testing.T) {
 		{"food", "0x5f6d625f2d303030303030303030302de5080908c794168285a090088ae892793d549f3e7069f4feae3677bf3a28ad39"},
 		{"good", "0x5f6d625f2d303030303030303030302d0c99238587914476198da04cbb1555d092f813eaf2e796893084406290188776"},
 	}
-	//删除
-	delLeafs := []record{
-		{keyLeafs[0].key, keyLeafs[0].value},
-		{keyLeafs[1].key, keyLeafs[1].value},
-		{keyLeafs[2].key, keyLeafs[2].value},
-		{keyLeafs[3].key, keyLeafs[3].value},
-	}
-	mpleafHash := make(map[string]bool)
-	for _, d := range delLeafs {
-		k, _ := FromHex(d.value)
-		mpleafHash[string(k)] = true
-	}
-	pruningHashNode(db, mpleafHash)
-	tree2 := NewTree(db, true)
-	err = tree2.Load(hash1)
-	require.NoError(t, err)
-	upRecords := []record{
-		{"abc", "abc1"},
-		{"low", "low1"},
-		{"fan", "fan1"},
-		{"foo", "foo1"},
-		{"foobaz", "foobaz"},
-		{"good", "good"},
 
+	tr1 := NewTree(db, true, treeCfg)
+	tr1.Load(hash1)
+	for _, val := range expecteds {
+		_, hash, exists := tr1.GetHash([]byte(val.key))
+		if exists {
+			require.Equal(t, ToHex(hash), val.value)
+		}
+	}
+}
+
+func TestRemoveLeafCountKey(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	type record struct {
+		key   string
+		value string
+	}
+	records := []record{
+		{"abc", "abc"},
+		{"low", "low"},
+		{"fan", "fan"},
+		{"foo", "foo"},
+		{"foobaz", "foobaz"},
+	}
+	//开启裁剪
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+	}
+
+	dbm := db.NewDB("mavltree", "leveldb", dir, 100)
+
+	blockHeight := int64(1000)
+	tree := NewTree(dbm, true, treeCfg)
+	tree.SetBlockHeight(blockHeight)
+	for _, r := range records {
+		tree.Set([]byte(r.key), []byte(r.value))
+	}
+	hash := tree.Save()
+
+	var countKeys [][]byte
+	prefix := []byte(leafKeyCountPrefix)
+	it := dbm.Iterator(prefix, nil, true)
+	for it.Rewind(); it.Valid(); it.Next() {
+		k := make([]byte, len(it.Key()))
+		copy(k, it.Key())
+		countKeys = append(countKeys, k)
+	}
+	it.Close()
+
+	// 在blockHeight + 100高度在插入另外
+	tree1 := NewTree(dbm, true, treeCfg)
+	tree1.Load(hash)
+	tree1.SetBlockHeight(blockHeight + 100)
+	records1 := []record{
+		{"abc", "abc1"},
+		{"good", "good"},
 		{"foobang", "foobang"},
 		{"foobar", "foobar"},
 		{"food", "food"},
 		{"foml", "foml"},
 	}
-	for _, k := range upRecords {
-		_, v, _ := tree2.Get([]byte(k.key))
-		assert.Equal(t, []byte(k.value), v)
+	for _, r := range records1 {
+		tree1.Set([]byte(r.key), []byte(r.value))
+	}
+	hash1 := tree1.Save()
+
+	mpAllKeys := make(map[string]bool)
+	it = dbm.Iterator(prefix, nil, true)
+	for it.Rewind(); it.Valid(); it.Next() {
+		mpAllKeys[string(it.Key())] = true
+	}
+	it.Close()
+
+	// check
+	tr1 := NewTree(dbm, true, treeCfg)
+	tr1.Load(hash1)
+	tr1.RemoveLeafCountKey(blockHeight)
+	for _, key := range countKeys {
+		_, err := dbm.Get(key)
+		if err == nil {
+			require.Error(t, fmt.Errorf("this kv should not exist"))
+		}
+	}
+	// leave key
+	for _, key := range countKeys {
+		delete(mpAllKeys, string(key))
+	}
+	// check leave key
+	for key := range mpAllKeys {
+		_, err := dbm.Get([]byte(key))
+		if err != nil {
+			require.Error(t, fmt.Errorf("this kv should exist"))
+		}
+	}
+}
+
+func TestIsRemoveLeafCountKey(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	maxBlockHeight = 0
+	dbm := db.NewDB("mavltree", "leveldb", dir, 100)
+	tree := NewTree(dbm, true, nil)
+	tree.SetBlockHeight(1000)
+	isRe := tree.isRemoveLeafCountKey()
+	require.Equal(t, false, isRe)
+	tree.SetBlockHeight(990)
+	isRe = tree.isRemoveLeafCountKey()
+	require.Equal(t, true, isRe)
+	tree.SetBlockHeight(1000)
+	isRe = tree.isRemoveLeafCountKey()
+	require.Equal(t, true, isRe)
+	tree.SetBlockHeight(1010)
+	isRe = tree.isRemoveLeafCountKey()
+	require.Equal(t, false, isRe)
+	tree.ndb.Commit()
+	require.Equal(t, int64(1010), tree.getMaxBlockHeight())
+
+	var swg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		swg.Add(1)
+		go func(i int, pwg *sync.WaitGroup, dbn db.DB) {
+			defer swg.Done()
+			tree := NewTree(dbm, true, nil)
+			tree.SetBlockHeight(int64(800 + i))
+			require.Equal(t, true, tree.isRemoveLeafCountKey())
+		}(i, &swg, dbm)
+	}
+	swg.Wait()
+}
+
+func TestGetRootHash(t *testing.T) {
+	hashstr := "0xd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d"
+	hash, err := FromHex(hashstr)
+	require.NoError(t, err)
+	height := 999
+	hashkey := genRootHashHeight(int64(height), hash)
+	actHash, err := getRootHash(hashkey)
+	require.NoError(t, err)
+	require.Equal(t, hash, actHash)
+}
+
+func TestSaveRootHash(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
 	}
 
+	dbm := db.NewDB("mavltree", "leveldb", dir, 100)
+	tree := NewTree(dbm, true, treeCfg)
+	tree.SetBlockHeight(1010)
+	tree.Set([]byte("key:111"), []byte("value:111"))
+	hash := tree.Save()
+	_, err = dbm.Get(genRootHashHeight(1010, hash))
+	require.NoError(t, err)
+}
+
+func TestDelLeafCountKV(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	type record struct {
+		key   string
+		value string
+	}
+	records := []record{
+		{"abc", "abc"},
+		{"low", "low"},
+		{"fan", "fan"},
+		{"foo", "foo"},
+		{"foobaz", "foobaz"},
+	}
+	//开启裁剪
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+	}
+
+	dbm := db.NewDB("mavltree", "leveldb", dir, 100)
+
+	blockHeight := int64(1000)
+	tree := NewTree(dbm, true, treeCfg)
+	tree.SetBlockHeight(blockHeight)
+	for _, r := range records {
+		tree.Set([]byte(r.key), []byte(r.value))
+	}
+	hash := tree.Save()
+
+	var countKeys [][]byte
+	prefix := []byte(leafKeyCountPrefix)
+	it := dbm.Iterator(prefix, nil, true)
+	for it.Rewind(); it.Valid(); it.Next() {
+		k := make([]byte, len(it.Key()))
+		copy(k, it.Key())
+		countKeys = append(countKeys, k)
+	}
+	it.Close()
+
+	// 在blockHeight + 100高度在插入另外
+	tree1 := NewTree(dbm, true, treeCfg)
+	tree1.Load(hash)
+	tree1.SetBlockHeight(blockHeight + 100)
+	records1 := []record{
+		{"abc", "abc1"},
+		{"good", "good"},
+		{"foobang", "foobang"},
+		{"foobar", "foobar"},
+		{"food", "food"},
+		{"foml", "foml"},
+	}
+	for _, r := range records1 {
+		tree1.Set([]byte(r.key), []byte(r.value))
+	}
+	tree1.Save()
+
+	mpAllKeys := make(map[string]bool)
+	it = dbm.Iterator(prefix, nil, true)
+	for it.Rewind(); it.Valid(); it.Next() {
+		mpAllKeys[string(it.Key())] = true
+	}
+	it.Close()
+
+	// check
+	// del leaf count key
+	err = DelLeafCountKV(dbm, blockHeight, treeCfg)
+	require.NoError(t, err)
+
+	for _, key := range countKeys {
+		_, err := dbm.Get(key)
+		if err == nil {
+			require.Error(t, fmt.Errorf("this kv should not exist"))
+		}
+	}
+	// leave key
+	for _, key := range countKeys {
+		delete(mpAllKeys, string(key))
+	}
+	// check leave key
+	for key := range mpAllKeys {
+		_, err := dbm.Get([]byte(key))
+		if err != nil {
+			require.Error(t, fmt.Errorf("this kv should exist"))
+		}
+	}
+}
+
+func TestGetObsoleteNode(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	treeCfg := &TreeConfig{
+		EnableMemTree:   true,
+		EnableMemVal:    true,
+		TkCloseCacheLen: 100,
+	}
+
+	InitGlobalMem(treeCfg)
+	db := db.NewDB("mavltree", "leveldb", dir, 100)
+	tree := NewTree(db, true, treeCfg)
+
+	type record struct {
+		key   string
+		value string
+	}
+	records := []record{
+		{"abc", "abc"},
+		{"low", "low"},
+		{"fan", "fan"},
+	}
+
+	for _, r := range records {
+		updated := tree.Set([]byte(r.key), []byte(r.value))
+		if updated {
+			t.Error("should have not been updated")
+		}
+	}
+	hash := tree.Save()
+	obs := tree.getObsoleteNode()
+	require.Equal(t, 0, len(obs))
+	mp := make(map[uint64]struct{})
+	LoadTree2MemDb(db, hash, mp)
+
+	tree1 := NewTree(db, true, treeCfg)
+	tree1.Load(hash)
+	records1 := []record{
+		{"abc", "abc1"},
+		{"low", "low1"},
+		{"fan", "fan1"},
+	}
+
+	for _, r := range records1 {
+		tree1.Set([]byte(r.key), []byte(r.value))
+	}
+	hash1 := tree1.Save()
+	obs = tree1.getObsoleteNode()
+	mp1 := make(map[uint64]struct{})
+	LoadTree2MemDb(db, hash1, mp1)
+	require.Equal(t, len(mp), len(obs)) //做了全部更新，因此旧节点全部删除
+	for ob := range obs {
+		_, ok := mp[uint64(ob)]
+		if !ok {
+			require.Error(t, fmt.Errorf("should exist"))
+		}
+	}
+
+	tree2 := NewTree(db, true, treeCfg)
+	tree2.Load(hash)
+	records2 := []record{
+		{"fan", "fan1"},
+		{"foo", "foo"},
+		{"foobaz", "foobaz"},
+		{"good", "good"},
+	}
+	for _, r := range records2 {
+		tree2.Set([]byte(r.key), []byte(r.value))
+	}
+	hash2 := tree2.Save()
+	obs = tree2.getObsoleteNode()
+	mp2 := make(map[uint64]struct{})
+	LoadTree2MemDb(db, hash2, mp2)
+	//require.Equal(t, 0, len(obs))
+	for ob := range obs {
+		_, ok := mp[uint64(ob)]
+		if !ok {
+			require.Error(t, fmt.Errorf("should exist"))
+		}
+	}
+}
+
+func TestPruningFirstLevelNode(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.RemoveAll(dir)
+
+	db1 := db.NewDB("mavltree", "leveldb", dir, 100)
+	//add node data
+	nodes1 := []Node{
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d"), height: 1},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44a"), height: 5000},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44b"), height: 10000},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44c"), height: 30000},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44e"), height: 40000},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44f"), height: 450000},
+	}
+
+	nodes2 := []Node{
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45d"), height: 1},
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45a"), height: 5000},
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45b"), height: 10000},
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45c"), height: 30000},
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45e"), height: 40000},
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45f"), height: 450000},
+	}
+
+	hashNodes1 := []types.PruneData{
+		{Hashs: [][]byte{[]byte("113"), []byte("114"), []byte("115"), []byte("116"), []byte("117"), []byte("118")}},
+		{Hashs: [][]byte{[]byte("123"), []byte("124"), []byte("125"), []byte("126"), []byte("127"), []byte("128")}},
+		{Hashs: [][]byte{[]byte("133"), []byte("134"), []byte("135"), []byte("136"), []byte("137"), []byte("138")}},
+		{Hashs: [][]byte{[]byte("143"), []byte("144"), []byte("145"), []byte("146"), []byte("147"), []byte("148")}},
+		{Hashs: [][]byte{[]byte("153"), []byte("154"), []byte("155"), []byte("156"), []byte("157"), []byte("158")}},
+		{Hashs: [][]byte{[]byte("163"), []byte("164"), []byte("165"), []byte("166"), []byte("167"), []byte("168")}},
+	}
+
+	hashNodes2 := []types.PruneData{
+		{Hashs: [][]byte{[]byte("213"), []byte("214"), []byte("215"), []byte("216"), []byte("217"), []byte("218")}},
+		{Hashs: [][]byte{[]byte("223"), []byte("224"), []byte("225"), []byte("226"), []byte("227"), []byte("228")}},
+		{Hashs: [][]byte{[]byte("233"), []byte("234"), []byte("235"), []byte("236"), []byte("237"), []byte("238")}},
+		{Hashs: [][]byte{[]byte("243"), []byte("244"), []byte("245"), []byte("246"), []byte("247"), []byte("248")}},
+		{Hashs: [][]byte{[]byte("253"), []byte("254"), []byte("255"), []byte("256"), []byte("257"), []byte("258")}},
+		{Hashs: [][]byte{[]byte("263"), []byte("264"), []byte("265"), []byte("266"), []byte("267"), []byte("268")}},
+	}
+
+	batch := db1.NewBatch(true)
+	for i, node := range nodes1 {
+		k := genLeafCountKey(node.key, node.hash, int64(node.height), len(node.hash))
+		data := &types.PruneData{
+			Hashs: hashNodes1[i].Hashs,
+		}
+		v, err := proto.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		// 保存索引节点
+		batch.Set(k, v)
+		// 保存叶子节点
+		batch.Set(node.hash, node.key)
+		// 保存hash节点
+		for _, hash := range data.Hashs {
+			batch.Set(hash, hash)
+		}
+	}
+	for i, node := range nodes2 {
+		k := genLeafCountKey(node.key, node.hash, int64(node.height), len(node.hash))
+		data := &types.PruneData{
+			Hashs: hashNodes2[i].Hashs,
+		}
+		v, err := proto.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		// 保存索引节点
+		batch.Set(k, v)
+		// 保存叶子节点
+		batch.Set(node.hash, node.key)
+		// 保存hash节点
+		for _, hash := range data.Hashs {
+			batch.Set(hash, hash)
+		}
+	}
+	batch.Write()
+	db1.Close()
+
+	db2 := db.NewDB("mavltree", "leveldb", dir, 100)
+
+	var existHashs [][]byte
+	var noExistHashs [][]byte
+
+	treeCfg := &TreeConfig{
+		PruneHeight: 5000,
+	}
+	//当前高度设置为10000,只能删除高度为1的节点
+	pruningFirstLevel(db2, 10000, treeCfg)
+
+	for i, node := range nodes1 {
+		if i >= 1 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	for i, node := range nodes2 {
+		if i >= 1 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	verifyNodeExist(t, db2, existHashs, noExistHashs)
+
+	//当前高度设置为20000, 删除高度为1000的
+	pruningFirstLevel(db2, 20000, treeCfg)
+
+	existHashs = existHashs[:0][:0]
+	existHashs = noExistHashs[:0][:0]
+	for i, node := range nodes1 {
+		if i >= 2 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	for i, node := range nodes2 {
+		if i >= 2 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	verifyNodeExist(t, db2, existHashs, noExistHashs)
+
+	//目前还剩下 10000 30000 40000 450000
+	//当前高度设置为510001, 将高度为10000的加入二级节点,删除30000 40000节点
+	pruningFirstLevel(db2, 510001, treeCfg)
+	existHashs = existHashs[:0][:0]
+	existHashs = noExistHashs[:0][:0]
+	for i, node := range nodes1 {
+		if i >= 5 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else if i == 2 {
+
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	for i, node := range nodes2 {
+		if i >= 5 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else if i == 2 {
+
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	verifyNodeExist(t, db2, existHashs, noExistHashs)
+
+	//检查转换成二级裁剪高度的节点
+	var secLevelNodes []*Node
+	secLevelNodes = append(secLevelNodes, &nodes1[2])
+	secLevelNodes = append(secLevelNodes, &nodes2[2])
+	VerifySecLevelCountNodeExist(t, db2, secLevelNodes)
+}
+
+func verifyNodeExist(t *testing.T, dbm db.DB, existHashs [][]byte, noExistHashs [][]byte) {
+	for _, hash := range existHashs {
+		_, err := dbm.Get(hash)
+		if err != nil {
+			require.NoError(t, fmt.Errorf("this node should exist %s", string(hash)))
+		}
+	}
+
+	for _, hash := range noExistHashs {
+		v, err := dbm.Get(hash)
+		if err == nil || len(v) > 0 {
+			require.NoError(t, fmt.Errorf("this node should not exist %s", string(hash)))
+		}
+	}
+}
+
+func VerifySecLevelCountNodeExist(t *testing.T, dbm db.DB, nodes []*Node) {
+	for _, node := range nodes {
+		_, err := dbm.Get(genOldLeafCountKey(node.key, node.hash, int64(node.height), len(node.hash)))
+		if err != nil {
+			require.NoError(t, fmt.Errorf("this node should exist key: %s, hash: %s", string(node.key), string(node.hash)))
+		}
+	}
+}
+
+func TestPruningSecondLevelNode(t *testing.T) {
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.RemoveAll(dir)
+
+	db1 := db.NewDB("mavltree", "leveldb", dir, 100)
+	//add node data
+	nodes1 := []Node{
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d"), height: 1},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44a"), height: 5000},
+		{key: []byte("11111111"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44b"), height: 10000},
+	}
+
+	nodes2 := []Node{
+		{key: []byte("22222222"), hash: []byte("d95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc45d"), height: 1},
+	}
+
+	hashNodes1 := []types.PruneData{
+		{Hashs: [][]byte{[]byte("113"), []byte("114"), []byte("115"), []byte("116"), []byte("117"), []byte("118")}},
+		{Hashs: [][]byte{[]byte("123"), []byte("124"), []byte("125"), []byte("126"), []byte("127"), []byte("128")}},
+		{Hashs: [][]byte{[]byte("133"), []byte("134"), []byte("135"), []byte("136"), []byte("137"), []byte("138")}},
+	}
+
+	hashNodes2 := []types.PruneData{
+		{Hashs: [][]byte{[]byte("213"), []byte("214"), []byte("215"), []byte("216"), []byte("217"), []byte("218")}},
+	}
+
+	batch := db1.NewBatch(true)
+	for i, node := range nodes1 {
+		k := genOldLeafCountKey(node.key, node.hash, int64(node.height), len(node.hash))
+		data := &types.PruneData{
+			Hashs: hashNodes1[i].Hashs,
+		}
+		v, err := proto.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		// 保存索引节点
+		batch.Set(k, v)
+		// 保存叶子节点
+		batch.Set(node.hash, node.key)
+		// 保存hash节点
+		for _, hash := range data.Hashs {
+			batch.Set(hash, hash)
+		}
+	}
+	for i, node := range nodes2 {
+		k := genOldLeafCountKey(node.key, node.hash, int64(node.height), len(node.hash))
+		data := &types.PruneData{
+			Hashs: hashNodes2[i].Hashs,
+		}
+		v, err := proto.Marshal(data)
+		if err != nil {
+			panic(err)
+		}
+		// 保存索引节点
+		batch.Set(k, v)
+		// 保存叶子节点
+		batch.Set(node.hash, node.key)
+		// 保存hash节点
+		for _, hash := range data.Hashs {
+			batch.Set(hash, hash)
+		}
+	}
+	batch.Write()
+	db1.Close()
+
+	db2 := db.NewDB("mavltree", "leveldb", dir, 100)
+
+	var existHashs [][]byte
+	var noExistHashs [][]byte
+
+	//当前高度设置为1500010,只能删除高度为1的节点
+	treeCfg := &TreeConfig{
+		PruneHeight: 5000,
+	}
+	pruningSecondLevel(db2, 1500010, treeCfg)
+
+	for i, node := range nodes1 {
+		if i >= 2 {
+			existHashs = append(existHashs, node.hash)
+			existHashs = append(existHashs, hashNodes1[i].Hashs...)
+		} else {
+			noExistHashs = append(noExistHashs, node.hash)
+			noExistHashs = append(noExistHashs, hashNodes1[i].Hashs...)
+		}
+	}
+	verifyNodeExist(t, db2, existHashs, noExistHashs)
+
+	//检查转换成二级裁剪高度的节点
+	var secLevelNodes []*Node
+	secLevelNodes = append(secLevelNodes, &nodes2[0])
+	VerifyThreeLevelCountNodeExist(t, db2, secLevelNodes)
+}
+
+func VerifyThreeLevelCountNodeExist(t *testing.T, dbm db.DB, nodes []*Node) {
+	for _, node := range nodes {
+		v, err := dbm.Get(genOldLeafCountKey(node.key, node.hash, int64(node.height), len(node.hash)))
+		if err == nil || len(v) > 0 {
+			require.NoError(t, fmt.Errorf("this node should not exist key:%s hash:%s", string(node.key), string(node.hash)))
+		}
+	}
+}
+
+func TestGetHashNode(t *testing.T) {
+	eHashs := [][]byte{
+		[]byte("h44"),
+		[]byte("h33"),
+		[]byte("h22"),
+		[]byte("h11"),
+		[]byte("h00"),
+	}
+
+	root := &Node{
+		key:        []byte("00"),
+		hash:       []byte("h00"),
+		parentNode: nil,
+	}
+
+	node1 := &Node{
+		key:        []byte("11"),
+		hash:       []byte("h11"),
+		parentNode: root,
+	}
+
+	node2 := &Node{
+		key:        []byte("22"),
+		hash:       []byte("h22"),
+		parentNode: node1,
+	}
+
+	node3 := &Node{
+		key:        []byte("33"),
+		hash:       []byte("h33"),
+		parentNode: node2,
+	}
+
+	node4 := &Node{
+		key:        []byte("44"),
+		hash:       []byte("h44"),
+		parentNode: node3,
+	}
+
+	leafN := &Node{
+		key:        []byte("55"),
+		hash:       []byte("h55"),
+		parentNode: node4,
+	}
+
+	hashs := getHashNode(leafN)
+	require.Equal(t, len(eHashs), len(hashs))
+	for _, hash := range hashs {
+		t.Log("hash is ", string(hash))
+		require.Contains(t, eHashs, hash)
+	}
+}
+
+func TestGetKeyHeightFromLeafCountKey(t *testing.T) {
+	key := []byte("123456")
+	hash, err := FromHex("0x5f6d625f2d303030303030303030302dd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d")
+	require.NoError(t, err)
+	height := 100001
+	hashLen := len(hash)
+	hashkey := genLeafCountKey(key, hash, int64(height), hashLen)
+
+	//1
+	key1, height1, hash1, err := getKeyHeightFromLeafCountKey(hashkey)
+	require.NoError(t, err)
+	require.Equal(t, key, key1)
+	require.Equal(t, height, height1)
+	require.Equal(t, hash, hash1)
+
+	//2
+	key = []byte("24525252626988973653")
+	hash, err = FromHex("0xd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d")
+	require.NoError(t, err)
+	height = 453
+	hashLen = len(hash)
+	hashkey = genLeafCountKey(key, hash, int64(height), hashLen)
+
+	key1, height1, hash1, err = getKeyHeightFromLeafCountKey(hashkey)
+	require.NoError(t, err)
+	require.Equal(t, key, key1)
+	require.Equal(t, height, height1)
+	require.Equal(t, hash, hash1)
+}
+
+func TestGetKeyHeightFromOldLeafCountKey(t *testing.T) {
+	key := []byte("123456")
+	hash, err := FromHex("0x5f6d625f2d303030303030303030302dd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d")
+	require.NoError(t, err)
+	height := 100001
+	hashLen := len(hash)
+	hashkey := genOldLeafCountKey(key, hash, int64(height), hashLen)
+
+	//1
+	key1, height1, hash1, err := getKeyHeightFromOldLeafCountKey(hashkey)
+	require.NoError(t, err)
+	require.Equal(t, key, key1)
+	require.Equal(t, height, height1)
+	require.Equal(t, hash, hash1)
+
+	//2
+	key = []byte("24525252626988973653")
+	hash, err = FromHex("0xd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d")
+	require.NoError(t, err)
+	height = 453
+	hashLen = len(hash)
+	hashkey = genOldLeafCountKey(key, hash, int64(height), hashLen)
+
+	key1, height1, hash1, err = getKeyHeightFromOldLeafCountKey(hashkey)
+	require.NoError(t, err)
+	require.Equal(t, key, key1)
+	require.Equal(t, height, height1)
+	require.Equal(t, hash, hash1)
+}
+
+func TestPrintSameLeafKey(t *testing.T) {
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+	}
+	type record struct {
+		key   string
+		value string
+	}
+	records := []record{
+		{"abc", "abc"},
+		{"low", "low"},
+		{"fan", "fan"},
+	}
+
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	db := db.NewDB("mavltree", "leveldb", dir, 100)
+	tree := NewTree(db, true, treeCfg)
+
+	for _, r := range records {
+		updated := tree.Set([]byte(r.key), []byte(r.value))
+		if updated {
+			t.Error("should have not been updated")
+		}
+	}
+	tree.Save()
+	PrintSameLeafKey(db, "abc")
+}
+
+func TestPrintLeafNodeParent(t *testing.T) {
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+	}
+	blockHeight := int64(1000)
+	type record struct {
+		key   string
+		value string
+	}
+	records := []record{
+		{"abc", "abc"},
+		{"low", "low"},
+		{"fan", "fan"},
+	}
+
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	db := db.NewDB("mavltree", "leveldb", dir, 100)
+	tree := NewTree(db, true, treeCfg)
+	tree.SetBlockHeight(blockHeight)
+	for _, r := range records {
+		updated := tree.Set([]byte(r.key), []byte(r.value))
+		if updated {
+			t.Error("should have not been updated")
+		}
+	}
+	tree.Save()
+	hash, _ := FromHex("0x5f6d625f2d303030303030303030302dd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d")
+	PrintLeafNodeParent(db, []byte("abc"), hash, blockHeight)
+}
+
+func TestPrintNodeDb(t *testing.T) {
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+		EnableMavlPrune:  true,
+	}
+	type record struct {
+		key   string
+		value string
+	}
+	records := []record{
+		{"abc", "abc"},
+		{"low", "low"},
+		{"fan", "fan"},
+	}
+
+	dir, err := ioutil.TempDir("", "datastore")
+	require.NoError(t, err)
+	t.Log(dir)
+	defer os.Remove(dir)
+
+	db := db.NewDB("mavltree", "leveldb", dir, 100)
+	tree := NewTree(db, true, treeCfg)
+
+	for _, r := range records {
+		updated := tree.Set([]byte(r.key), []byte(r.value))
+		if updated {
+			t.Error("should have not been updated")
+		}
+	}
+	tree.Save()
+	hash, _ := FromHex("0x5f6d625f2d303030303030303030302dd95f1027b1ecf9013a1cf870a85d967ca828e8faca366a290ec43adcecfbc44d")
+	PrintNodeDb(db, hash)
 }
 
 func BenchmarkDBSet(b *testing.B) {
@@ -1028,7 +1872,7 @@ func BenchmarkDBSet(b *testing.B) {
 	db := db.NewDB("test", "leveldb", dir, 100)
 	prevHash := make([]byte, 32)
 	for i := 0; i < b.N; i++ {
-		prevHash, err = saveBlock(db, int64(i), prevHash, 1000, false)
+		prevHash, err = saveBlock(db, int64(i), prevHash, 1000, false, nil)
 		assert.Nil(b, err)
 	}
 }
@@ -1040,31 +1884,26 @@ func BenchmarkDBSetMVCC(b *testing.B) {
 	db := db.NewDB("test", "leveldb", dir, 100)
 	prevHash := make([]byte, 32)
 	for i := 0; i < b.N; i++ {
-		prevHash, err = saveBlock(db, int64(i), prevHash, 1000, true)
+		prevHash, err = saveBlock(db, int64(i), prevHash, 1000, true, nil)
 		assert.Nil(b, err)
 	}
 }
 
 func BenchmarkDBGet(b *testing.B) {
-	//开启MVCC情况下不做测试；BenchmarkDBGetMVCC进行测试
-	if enableMvcc {
-		b.Skip()
-		return
-	}
 	dir, err := ioutil.TempDir("", "datastore")
 	require.NoError(b, err)
 	b.Log(dir)
 	db := db.NewDB("test", "leveldb", dir, 100)
 	prevHash := make([]byte, 32)
 	for i := 0; i < b.N; i++ {
-		prevHash, err = saveBlock(db, int64(i), prevHash, 1000, false)
+		prevHash, err = saveBlock(db, int64(i), prevHash, 1000, false, nil)
 		assert.Nil(b, err)
 		if i%10 == 0 {
 			fmt.Println(prevHash)
 		}
 	}
 	b.ResetTimer()
-	t := NewTree(db, true)
+	t := NewTree(db, true, nil)
 	t.Load(prevHash)
 	for i := 0; i < b.N*1000; i++ {
 		key := i2b(int32(i))
@@ -1083,10 +1922,11 @@ func BenchmarkDBGetMVCC(b *testing.B) {
 	b.Log(dir)
 	ldb := db.NewDB("test", "leveldb", dir, 100)
 	prevHash := make([]byte, 32)
-	EnableMavlPrefix(true)
-	defer EnableMavlPrefix(false)
+	treeCfg := &TreeConfig{
+		EnableMavlPrefix: true,
+	}
 	for i := 0; i < b.N; i++ {
-		prevHash, err = saveBlock(ldb, int64(i), prevHash, 1000, true)
+		prevHash, err = saveBlock(ldb, int64(i), prevHash, 1000, true, treeCfg)
 		assert.Nil(b, err)
 		if i%10 == 0 {
 			fmt.Println(prevHash)
@@ -1123,8 +1963,8 @@ func genKV(height int64, txN int64) (kvs []*types.KeyValue) {
 	return kvs
 }
 
-func saveBlock(dbm db.DB, height int64, hash []byte, txN int64, mvcc bool) (newHash []byte, err error) {
-	t := NewTree(dbm, true)
+func saveBlock(dbm db.DB, height int64, hash []byte, txN int64, mvcc bool, treeCfg *TreeConfig) (newHash []byte, err error) {
+	t := NewTree(dbm, true, treeCfg)
 	t.Load(hash)
 	kvs := genKV(height, txN)
 	for _, kv := range kvs {
@@ -1147,4 +1987,65 @@ func saveBlock(dbm db.DB, height int64, hash []byte, txN int64, mvcc bool) (newH
 		}
 	}
 	return newHash, nil
+}
+
+func TestSize1(t *testing.T) {
+	type storeNode struct {
+		Key       []byte
+		Value     []byte
+		LeftHash  []byte
+		RightHash []byte
+		Height    int32
+		Size      int32
+	}
+	type storeNode1 struct {
+		Key    [][]byte
+		Height int32
+		Size   int32
+	}
+	a := types.StoreNode{}
+	b := storeNode{}
+	var c []byte
+	d := storeNode1{}
+
+	//arcmp := NewTreeARC(10 * 10000)
+	//if arcmp == nil {
+	//	return
+	//}
+	//
+	//for i := 0; i < 10*10000; i++ {
+	//	data := &storeNode{
+	//		Key: []byte("12345678901234567890123456789012"),
+	//		Value: []byte("12345678901234567890123456789012"),
+	//		LeftHash: []byte("12345678901234567890123456789012"),
+	//		RightHash: []byte("12345678901234567890123456789012"),
+	//		//Key: copyBytes([]byte("12345678901234567890123456789012")),
+	//		//Value: copyBytes([]byte("12345678901234567890123456789012")),
+	//		//LeftHash: copyBytes([]byte("12345678901234567890123456789012")),
+	//		//RightHash: copyBytes([]byte("12345678901234567890123456789012")),
+	//		Height: 1,
+	//		Size: 123,
+	//	}
+	//	arcmp.Add(int64(i), data)
+	//}
+
+	//for i := 0; i < 100*10000; i++ {
+	//	data := &storeNode1{}
+	//	data.Height = 123
+	//	data.Size = 123
+	//	d.Key = make([][]byte, 4)
+	//	//d.Key[0] = []byte("12345678901234567890123456789012")
+	//	//d.Key[1] = []byte("12345678901234567890123456789012")
+	//	//d.Key[2] = []byte("12345678901234567890123456789012")
+	//	//d.Key[3] = []byte("12345678901234567890123456789012")
+	//
+	//	d.Key[0] = copyBytes([]byte("12345678901234567890123456789012"))
+	//	d.Key[1] = copyBytes([]byte("12345678901234567890123456789012"))
+	//	d.Key[2] = copyBytes([]byte("12345678901234567890123456789012"))
+	//	d.Key[3] = copyBytes([]byte("12345678901234567890123456789012"))
+	//	arcmp.Add(int64(i), data)
+	//}
+
+	PrintMemStats(1)
+	fmt.Println(unsafe.Sizeof(a), unsafe.Sizeof(b), unsafe.Sizeof(c), unsafe.Sizeof(d), len(d.Key), cap(d.Key))
 }

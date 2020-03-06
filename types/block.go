@@ -5,45 +5,97 @@
 package types
 
 import (
+	"bytes"
 	"runtime"
 	"sync"
 
 	"github.com/33cn/chain33/common"
 	"github.com/33cn/chain33/common/crypto"
-	"github.com/golang/protobuf/proto"
+	proto "github.com/golang/protobuf/proto"
 )
 
-func (block *Block) Hash() []byte {
-	data, err := proto.Marshal(block.GetHeader())
+// Hash 获取block的hash值
+func (block *Block) Hash(cfg *Chain33Config) []byte {
+	if cfg.IsFork(block.Height, "ForkBlockHash") {
+		return block.HashNew()
+	}
+	return block.HashOld()
+}
+
+//HashByForkHeight hash 通过自己设置的fork 高度计算 hash
+func (block *Block) HashByForkHeight(forkheight int64) []byte {
+	if block.Height >= forkheight {
+		return block.HashNew()
+	}
+	return block.HashOld()
+}
+
+//HashNew 新版本的Hash
+func (block *Block) HashNew() []byte {
+	data, err := proto.Marshal(block.getHeaderHashNew())
 	if err != nil {
 		panic(err)
 	}
 	return common.Sha256(data)
 }
 
+//HashOld 老版本的hash
+func (block *Block) HashOld() []byte {
+	data, err := proto.Marshal(block.getHeaderHashOld())
+	if err != nil {
+		panic(err)
+	}
+	return common.Sha256(data)
+}
+
+// Size 获取block的Size
 func (block *Block) Size() int {
 	return Size(block)
 }
 
-func (block *Block) GetHeader() *Header {
+// GetHeader 获取block的Header信息
+func (block *Block) GetHeader(cfg *Chain33Config) *Header {
 	head := &Header{}
 	head.Version = block.Version
 	head.ParentHash = block.ParentHash
 	head.TxHash = block.TxHash
 	head.BlockTime = block.BlockTime
 	head.Height = block.Height
-	if IsFork(head.Height, "ForkBlockHash") {
-		head.Difficulty = block.Difficulty
-		head.StateHash = block.StateHash
-		head.TxCount = int64(len(block.Txs))
-	}
+	head.Difficulty = block.Difficulty
+	head.StateHash = block.StateHash
+	head.TxCount = int64(len(block.Txs))
+	head.Hash = block.Hash(cfg)
 	return head
 }
 
-func (block *Block) CheckSign() bool {
+func (block *Block) getHeaderHashOld() *Header {
+	head := &Header{}
+	head.Version = block.Version
+	head.ParentHash = block.ParentHash
+	head.TxHash = block.TxHash
+	head.BlockTime = block.BlockTime
+	head.Height = block.Height
+	return head
+}
+
+func (block *Block) getHeaderHashNew() *Header {
+	head := &Header{}
+	head.Version = block.Version
+	head.ParentHash = block.ParentHash
+	head.TxHash = block.TxHash
+	head.BlockTime = block.BlockTime
+	head.Height = block.Height
+	head.Difficulty = block.Difficulty
+	head.StateHash = block.StateHash
+	head.TxCount = int64(len(block.Txs))
+	return head
+}
+
+// CheckSign 检测block的签名
+func (block *Block) CheckSign(cfg *Chain33Config) bool {
 	//检查区块的签名
 	if block.Signature != nil {
-		hash := block.Hash()
+		hash := block.Hash(cfg)
 		sign := block.GetSignature()
 		if !CheckSign(hash, "", sign) {
 			return false
@@ -119,6 +171,7 @@ func checkAll(task []*Transaction, n int) bool {
 	return true
 }
 
+// CheckSign 检测签名
 func CheckSign(data []byte, execer string, sign *Signature) bool {
 	//GetDefaultSign: 系统内置钱包，非插件中的签名
 	c, err := crypto.New(GetSignName(execer, int(sign.Ty)))
@@ -134,4 +187,74 @@ func CheckSign(data []byte, execer string, sign *Signature) bool {
 		return false
 	}
 	return pub.VerifyBytes(data, signbytes)
+}
+
+//FilterParaTxsByTitle 过滤指定title的平行链交易
+//1，单笔平行连交易
+//2,交易组中的平行连交易，需要将整个交易组都过滤出来
+//目前暂时不返回单个交易的proof证明路径，
+//后面会将平行链的交易组装到一起，构成一个子roothash。会返回子roothash的proof证明路径
+func (blockDetail *BlockDetail) FilterParaTxsByTitle(cfg *Chain33Config, title string) *ParaTxDetail {
+	var paraTx ParaTxDetail
+	paraTx.Header = blockDetail.Block.GetHeader(cfg)
+
+	for i := 0; i < len(blockDetail.Block.Txs); i++ {
+		tx := blockDetail.Block.Txs[i]
+		if IsSpecificParaExecName(title, string(tx.Execer)) {
+
+			//过滤交易组中的para交易，需要将整个交易组都过滤出来
+			if tx.GroupCount >= 2 {
+				txDetails, endIdx := blockDetail.filterParaTxGroup(tx, i)
+				paraTx.TxDetails = append(paraTx.TxDetails, txDetails...)
+				i = endIdx - 1
+				continue
+			}
+
+			//单笔para交易
+			var txDetail TxDetail
+			txDetail.Tx = tx
+			txDetail.Receipt = blockDetail.Receipts[i]
+			txDetail.Index = uint32(i)
+			paraTx.TxDetails = append(paraTx.TxDetails, &txDetail)
+
+		}
+	}
+	return &paraTx
+}
+
+//filterParaTxGroup 获取para交易所在交易组信息
+func (blockDetail *BlockDetail) filterParaTxGroup(tx *Transaction, index int) ([]*TxDetail, int) {
+	var headIdx int
+	var txDetails []*TxDetail
+
+	for i := index; i >= 0; i-- {
+		if bytes.Equal(tx.Header, blockDetail.Block.Txs[i].Hash()) {
+			headIdx = i
+			break
+		}
+	}
+
+	endIdx := headIdx + int(tx.GroupCount)
+	for i := headIdx; i < endIdx; i++ {
+		var txDetail TxDetail
+		txDetail.Tx = blockDetail.Block.Txs[i]
+		txDetail.Receipt = blockDetail.Receipts[i]
+		txDetail.Index = uint32(i)
+		txDetails = append(txDetails, &txDetail)
+	}
+	return txDetails, endIdx
+}
+
+// Size 获取blockDetail的Size
+func (blockDetail *BlockDetail) Size() int {
+	return Size(blockDetail)
+}
+
+// Size 获取header的Size
+func (header *Header) Size() int {
+	return Size(header)
+}
+
+func (paraTxDetail *ParaTxDetail) Size() int {
+	return Size(paraTxDetail)
 }

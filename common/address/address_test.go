@@ -12,24 +12,38 @@ import (
 	"time"
 
 	"github.com/33cn/chain33/common/crypto"
-	"github.com/stretchr/testify/require"
-
 	_ "github.com/33cn/chain33/system/crypto/init"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestAddress(t *testing.T) {
+func genkey() crypto.PrivKey {
 	c, err := crypto.New("secp256k1")
 	if err != nil {
-		t.Error(err)
-		return
+		panic(err)
 	}
 	key, err := c.GenKey()
 	if err != nil {
-		t.Error(err)
-		return
+		panic(err)
 	}
+	return key
+}
+func TestAddress(t *testing.T) {
+	key := genkey()
 	t.Logf("%X", key.Bytes())
 	addr := PubKeyToAddress(key.PubKey().Bytes())
+	t.Log(addr)
+}
+
+func TestMultiSignAddress(t *testing.T) {
+	key := genkey()
+	addr1 := MultiSignAddress(key.PubKey().Bytes())
+	addr := MultiSignAddress(key.PubKey().Bytes())
+	assert.Equal(t, addr1, addr)
+	err := CheckAddress(addr)
+	assert.Equal(t, ErrCheckVersion, err)
+	err = CheckMultiSignAddress(addr)
+	assert.Nil(t, err)
 	t.Log(addr)
 }
 
@@ -59,6 +73,17 @@ func TestCheckAddress(t *testing.T) {
 	addr := PubKeyToAddress(key.PubKey().Bytes())
 	err = CheckAddress(addr.String())
 	require.NoError(t, err)
+
+	err = CheckAddress(addr.String() + addr.String())
+	require.Equal(t, err, ErrAddressChecksum)
+}
+
+func TestExecAddress(t *testing.T) {
+	assert.Equal(t, "16htvcBNSEA7fZhAdLJphDwQRQJaHpyHTp", ExecAddress("ticket"))
+	assert.Equal(t, "16htvcBNSEA7fZhAdLJphDwQRQJaHpyHTp", ExecAddress("ticket"))
+	addr, err := NewAddrFromString(ExecAddress("ticket"))
+	assert.Nil(t, err)
+	assert.Equal(t, addr.Version, NormalVer)
 }
 
 func BenchmarkExecAddress(b *testing.B) {
@@ -81,4 +106,9 @@ func BenchmarkExecAddress(b *testing.B) {
 	fmt.Println(end)
 	duration = end - start
 	fmt.Println("duration without cache:", strconv.FormatInt(duration, 10))
+}
+
+func TestExecPubKey(t *testing.T) {
+	pubkey := ExecPubKey("test")
+	assert.True(t, len(pubkey) == 32)
 }

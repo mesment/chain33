@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package bip32 A fully compliant implementation of the BIP0032 spec for Hierarchical Deterministic Bitcoin addresses
 package bip32
 
 import (
@@ -14,16 +15,20 @@ import (
 )
 
 const (
-	FirstHardenedChild        = uint32(0x80000000)
+	// FirstHardenedChild FirstHardenedChild
+	FirstHardenedChild = uint32(0x80000000)
+	// PublicKeyCompressedLength 公钥压缩长度
 	PublicKeyCompressedLength = 33
 )
 
 var (
+	// PrivateWalletVersion 私钥钱包版本
 	PrivateWalletVersion, _ = hex.DecodeString("0488ADE4")
-	PublicWalletVersion, _  = hex.DecodeString("0488B21E")
+	// PublicWalletVersion 公钥钱包版本
+	PublicWalletVersion, _ = hex.DecodeString("0488B21E")
 )
 
-// Represents a bip32 extended key containing key data, chain code, parent information, and other meta data
+// Key Represents a bip32 extended key containing key data, chain code, parent information, and other meta data
 type Key struct {
 	Version     []byte // 4 bytes
 	Depth       byte   // 1 bytes
@@ -34,11 +39,14 @@ type Key struct {
 	IsPrivate   bool   // unserialized
 }
 
-// Creates a new master extended key from a seed
+// NewMasterKey Creates a new master extended key from a seed
 func NewMasterKey(seed []byte) (*Key, error) {
 	// Generate key and chaincode
 	hmac := hmac.New(sha512.New, []byte("Bitcoin seed"))
-	hmac.Write(seed)
+	_, err := hmac.Write(seed)
+	if err != nil {
+		return nil, err
+	}
 	intermediary := hmac.Sum(nil)
 
 	// Split it into our key and chain code
@@ -46,7 +54,7 @@ func NewMasterKey(seed []byte) (*Key, error) {
 	chainCode := intermediary[32:]
 
 	// Validate key
-	err := validatePrivateKey(keyBytes)
+	err = validatePrivateKey(keyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +73,7 @@ func NewMasterKey(seed []byte) (*Key, error) {
 	return key, nil
 }
 
-// Derives a child key from a given parent as outlined by bip32
+// NewChildKey Derives a child key from a given parent as outlined by bip32
 func (key *Key) NewChildKey(childIdx uint32) (*Key, error) {
 	hardenedChild := childIdx >= FirstHardenedChild
 	childIndexBytes := uint32Bytes(childIdx)
@@ -89,7 +97,10 @@ func (key *Key) NewChildKey(childIdx uint32) (*Key, error) {
 	data = append(data, childIndexBytes...)
 
 	hmac := hmac.New(sha512.New, key.ChainCode)
-	hmac.Write(data)
+	_, err := hmac.Write(data)
+	if err != nil {
+		return nil, err
+	}
 	intermediary := hmac.Sum(nil)
 
 	// Create child Key with data common to all both scenarios
@@ -128,7 +139,7 @@ func (key *Key) NewChildKey(childIdx uint32) (*Key, error) {
 	return childKey, nil
 }
 
-// Create public version of key or return a copy; 'Neuter' function from the bip32 spec
+// PublicKey Create public version of key or return a copy; 'Neuter' function from the bip32 spec
 func (key *Key) PublicKey() *Key {
 	keyBytes := key.Key
 
@@ -147,7 +158,7 @@ func (key *Key) PublicKey() *Key {
 	}
 }
 
-// Serialized an Key to a 78 byte byte slice
+// Serialize Serialized an Key to a 78 byte byte slice
 func (key *Key) Serialize() []byte {
 	// Private keys should be prepended with a single null byte
 	keyBytes := key.Key
@@ -157,12 +168,30 @@ func (key *Key) Serialize() []byte {
 
 	// Write fields to buffer in order
 	buffer := new(bytes.Buffer)
-	buffer.Write(key.Version)
-	buffer.WriteByte(key.Depth)
-	buffer.Write(key.FingerPrint)
-	buffer.Write(key.ChildNumber)
-	buffer.Write(key.ChainCode)
-	buffer.Write(keyBytes)
+	_, err := buffer.Write(key.Version)
+	if err != nil {
+		return nil
+	}
+	err = buffer.WriteByte(key.Depth)
+	if err != nil {
+		return nil
+	}
+	_, err = buffer.Write(key.FingerPrint)
+	if err != nil {
+		return nil
+	}
+	_, err = buffer.Write(key.ChildNumber)
+	if err != nil {
+		return nil
+	}
+	_, err = buffer.Write(key.ChainCode)
+	if err != nil {
+		return nil
+	}
+	_, err = buffer.Write(keyBytes)
+	if err != nil {
+		return nil
+	}
 
 	// Append the standard doublesha256 checksum
 	serializedKey := addChecksumToBytes(buffer.Bytes())
@@ -170,12 +199,12 @@ func (key *Key) Serialize() []byte {
 	return serializedKey
 }
 
-// Encode the Key in the standard Bitcoin base58 encoding
+// String Encode the Key in the standard Bitcoin base58 encoding
 func (key *Key) String() string {
 	return string(base58Encode(key.Serialize()))
 }
 
-// Cryptographically secure seed
+// NewSeed Cryptographically secure seed
 func NewSeed() ([]byte, error) {
 	// Well that easy, just make go read 256 random bytes into a slice
 	s := make([]byte, 256)

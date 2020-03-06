@@ -18,11 +18,14 @@ import (
 	"google.golang.org/grpc"
 )
 
+// P2pComm p2p communication
 var P2pComm Comm
 
+// Comm information
 type Comm struct{}
 
-func (Comm) AddrRouteble(addrs []string) []string {
+// AddrRouteble address router ,return enbale address
+func (Comm) AddrRouteble(addrs []string, version int32) []string {
 	var enableAddrs []string
 
 	for _, addr := range addrs {
@@ -31,17 +34,21 @@ func (Comm) AddrRouteble(addrs []string) []string {
 			log.Error("AddrRouteble", "NewNetAddressString", err.Error())
 			continue
 		}
-		conn, err := netaddr.DialTimeout(VERSION)
+		conn, err := netaddr.DialTimeout(version)
 		if err != nil {
 			//log.Error("AddrRouteble", "DialTimeout", err.Error())
 			continue
 		}
-		conn.Close()
+		err = conn.Close()
+		if err != nil {
+			log.Error("AddrRouteble", "conn.Close err", err.Error())
+		}
 		enableAddrs = append(enableAddrs, addr)
 	}
 	return enableAddrs
 }
 
+// RandStr return a rand string
 func (c Comm) RandStr(n int) string {
 	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	r := rand.New(rand.NewSource(types.Now().Unix()))
@@ -54,6 +61,7 @@ func (c Comm) RandStr(n int) string {
 	return string(b)
 }
 
+// GetLocalAddr get local address ,return address
 func (c Comm) GetLocalAddr() string {
 
 	conn, err := net.Dial("udp", "114.114.114.114:80")
@@ -68,15 +76,15 @@ func (c Comm) GetLocalAddr() string {
 }
 
 func (c Comm) dialPeerWithAddress(addr *NetAddress, persistent bool, node *Node) (*Peer, error) {
-	log.Info("dialPeerWithAddress")
-	conn, err := addr.DialTimeout(node.nodeInfo.cfg.Version)
+	log.Debug("dialPeerWithAddress")
+	conn, err := addr.DialTimeout(node.nodeInfo.channelVersion)
 	if err != nil {
 		return nil, err
 	}
 
 	peer, err := c.newPeerFromConn(conn, addr, node)
 	if err != nil {
-		conn.Close()
+		err = conn.Close()
 		return nil, err
 	}
 	peer.SetAddr(addr)
@@ -99,21 +107,21 @@ func (c Comm) newPeerFromConn(rawConn *grpc.ClientConn, remote *NetAddress, node
 func (c Comm) dialPeer(addr *NetAddress, node *Node) (*Peer, error) {
 	log.Debug("dialPeer", "will connect", addr.String())
 	var persistent bool
-	for _, seed := range node.nodeInfo.cfg.Seeds { //TODO待优化
-		if seed == addr.String() {
-			persistent = true //种子节点要一直连接
-		}
+
+	if _, ok := node.cfgSeeds.Load(addr.String()); ok {
+		persistent = true
 	}
 	peer, err := c.dialPeerWithAddress(addr, persistent, node)
 	if err != nil {
-		log.Error("dialPeer", "dial peer err:", err.Error())
+		log.Error("dialPeer", "nodeListenAddr", node.nodeInfo.listenAddr.str, "peerAddr", addr.str, "err", err)
 		return nil, err
 	}
 	//获取远程节点的信息 peer
-	log.Debug("dialPeer", "Peer info", peer)
+	log.Debug("dialPeer", "peer", peer)
 	return peer, nil
 }
 
+// GenPrivPubkey return key and pubkey in bytes
 func (c Comm) GenPrivPubkey() ([]byte, []byte, error) {
 	cr, err := crypto.New(types.GetSignName("", types.SECP256K1))
 	if err != nil {
@@ -128,6 +136,8 @@ func (c Comm) GenPrivPubkey() ([]byte, []byte, error) {
 	}
 	return key.Bytes(), key.PubKey().Bytes(), nil
 }
+
+// Pubkey get pubkey by priv key
 func (c Comm) Pubkey(key string) (string, error) {
 
 	cr, err := crypto.New(types.GetSignName("", types.SECP256K1))
@@ -149,9 +159,11 @@ func (c Comm) Pubkey(key string) (string, error) {
 
 	return hex.EncodeToString(priv.PubKey().Bytes()), nil
 }
+
+// NewPingData get ping node ,return p2pping
 func (c Comm) NewPingData(nodeInfo *NodeInfo) (*types.P2PPing, error) {
-	randNonce := rand.Int31n(102040)
-	ping := &types.P2PPing{Nonce: int64(randNonce), Addr: nodeInfo.GetExternalAddr().IP.String(), Port: int32(nodeInfo.GetExternalAddr().Port)}
+	randNonce := rand.New(rand.NewSource(time.Now().UnixNano())).Int63()
+	ping := &types.P2PPing{Nonce: randNonce, Addr: nodeInfo.GetExternalAddr().IP.String(), Port: int32(nodeInfo.GetExternalAddr().Port)}
 	var err error
 	p2pPrivKey, _ := nodeInfo.addrBook.GetPrivPubKey()
 	ping, err = c.Signature(p2pPrivKey, ping)
@@ -163,6 +175,7 @@ func (c Comm) NewPingData(nodeInfo *NodeInfo) (*types.P2PPing, error) {
 
 }
 
+// Signature nodedata by key
 func (c Comm) Signature(key string, in *types.P2PPing) (*types.P2PPing, error) {
 
 	data := types.Encode(in)
@@ -188,6 +201,8 @@ func (c Comm) Signature(key string, in *types.P2PPing) (*types.P2PPing, error) {
 
 	return in, nil
 }
+
+// CheckSign check signature data
 func (c Comm) CheckSign(in *types.P2PPing) bool {
 
 	sign := in.GetSign()
@@ -221,8 +236,12 @@ func (c Comm) CheckSign(in *types.P2PPing) bool {
 	return false
 }
 
+// CollectPeerStat collect peer stat and report
 func (c Comm) CollectPeerStat(err error, peer *Peer) {
 	if err != nil {
+		if err == types.ErrVersion || err == types.ErrP2PChannel {
+			peer.version.SetSupport(false)
+		}
 		peer.peerStat.NotOk()
 	} else {
 		peer.peerStat.Ok()
@@ -243,20 +262,30 @@ func (c Comm) reportPeerStat(peer *Peer) {
 	}
 }
 
+// BytesToInt32 bytes to int32 type
 func (c Comm) BytesToInt32(b []byte) int32 {
 	bytesBuffer := bytes.NewBuffer(b)
 	var tmp int32
-	binary.Read(bytesBuffer, binary.LittleEndian, &tmp)
+	err := binary.Read(bytesBuffer, binary.LittleEndian, &tmp)
+	if err != nil {
+		log.Error("BytesToInt32", "binary.Read err", err.Error())
+		return tmp
+	}
 	return tmp
 }
 
+// Int32ToBytes int32 to bytes type
 func (c Comm) Int32ToBytes(n int32) []byte {
 	tmp := n
 	bytesBuffer := bytes.NewBuffer([]byte{})
-	binary.Write(bytesBuffer, binary.LittleEndian, tmp)
+	err := binary.Write(bytesBuffer, binary.LittleEndian, tmp)
+	if err != nil {
+		return nil
+	}
 	return bytesBuffer.Bytes()
 }
 
+// GrpcConfig grpc config
 func (c Comm) GrpcConfig() grpc.ServiceConfig {
 
 	var defaulttimeout = 20 * time.Second

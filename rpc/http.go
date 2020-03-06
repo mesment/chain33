@@ -22,15 +22,17 @@ import (
 	pr "google.golang.org/grpc/peer"
 )
 
-// adapt HTTP connection to ReadWriteCloser
+// HTTPConn adapt HTTP connection to ReadWriteCloser
 type HTTPConn struct {
 	r   *http.Request
 	in  io.Reader
 	out io.Writer
 }
 
+// Read rewrite the read of http
 func (c *HTTPConn) Read(p []byte) (n int, err error) { return c.in.Read(p) }
 
+// Write rewrite the write of http
 func (c *HTTPConn) Write(d []byte) (n int, err error) { //添加支持gzip 发送
 
 	if strings.Contains(c.r.Header.Get("Accept-Encoding"), "gzip") {
@@ -41,8 +43,10 @@ func (c *HTTPConn) Write(d []byte) (n int, err error) { //添加支持gzip 发�
 	return c.out.Write(d)
 }
 
+// Close rewrite the close of http
 func (c *HTTPConn) Close() error { return nil }
 
+// Listen jsonsever listen
 func (j *JSONRPCServer) Listen() (int, error) {
 	listener, err := net.Listen("tcp", rpcCfg.JrpcBindAddr)
 	if err != nil {
@@ -60,7 +64,7 @@ func (j *JSONRPCServer) Listen() (int, error) {
 			return
 		}
 
-		if !checkIpWhitelist(ip) {
+		if !checkIPWhitelist(ip) {
 			writeError(w, r, 0, fmt.Sprintf(`The %s Address is not authorized!`, ip))
 			return
 		}
@@ -71,22 +75,23 @@ func (j *JSONRPCServer) Listen() (int, error) {
 				return
 			}
 			//格式做一个检查
-			client, err := parseJsonRpcParams(data)
-			errstr := "nil"
+			client, err := parseJSONRpcParams(data)
 			if err != nil {
-				errstr = err.Error()
-			}
-			log.Debug("JSONRPCServer", "request", string(data), "err", errstr)
-			if err != nil {
-				writeError(w, r, 0, fmt.Sprintf(`parse request err %s`, err.Error()))
+				err = fmt.Errorf(`invalid json request err:%s`, err.Error())
+				log.Debug("JSONRPCServer", "request", string(data), "parseErr", err)
+				writeError(w, r, 0, err.Error())
 				return
+			}
+			funcName := strings.Split(client.Method, ".")[len(strings.Split(client.Method, "."))-1]
+			if !checkFilterPrintFuncBlacklist(funcName) {
+				log.Debug("JSONRPCServer", "request", string(data))
 			}
 			//Release local request
 			ipaddr := net.ParseIP(ip)
 			if !ipaddr.IsLoopback() {
-				funcName := strings.Split(client.Method, ".")[len(strings.Split(client.Method, "."))-1]
+				//funcName := strings.Split(client.Method, ".")[len(strings.Split(client.Method, "."))-1]
 				if checkJrpcFuncBlacklist(funcName) || !checkJrpcFuncWhitelist(funcName) {
-					writeError(w, r, client.Id, fmt.Sprintf(`The %s method is not authorized!`, funcName))
+					writeError(w, r, client.ID, fmt.Sprintf(`The %s method is not authorized!`, funcName))
 					return
 				}
 			}
@@ -105,12 +110,16 @@ func (j *JSONRPCServer) Listen() (int, error) {
 	})
 
 	handler = co.Handler(handler)
-	go http.Serve(listener, handler)
+	if !rpcCfg.EnableTLS {
+		go http.Serve(listener, handler)
+	} else {
+		go http.ServeTLS(listener, handler, rpcCfg.CertFile, rpcCfg.KeyFile)
+	}
 	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
 type serverResponse struct {
-	Id     uint64      `json:"id"`
+	ID     uint64      `json:"id"`
 	Result interface{} `json:"result"`
 	Error  interface{} `json:"error"`
 }
@@ -124,9 +133,14 @@ func writeError(w http.ResponseWriter, r *http.Request, id uint64, errstr string
 		log.Debug("json marshal error, nerver happen")
 		return
 	}
-	w.Write(resp)
+	_, err = w.Write(resp)
+	if err != nil {
+		log.Debug("Write", "err", err)
+		return
+	}
 }
 
+// Listen grpcserver listen
 func (g *Grpcserver) Listen() (int, error) {
 	listener, err := net.Listen("tcp", rpcCfg.GrpcBindAddr)
 	if err != nil {
@@ -153,29 +167,29 @@ func auth(ctx context.Context, info *grpc.UnaryServerInfo) error {
 		//remoteaddr := strings.Split(getctx.Addr.String(), ":")[0]
 		ip, _, err := net.SplitHostPort(getctx.Addr.String())
 		if err != nil {
-			return fmt.Errorf("The %s Address is not authorized!", ip)
+			return fmt.Errorf("the %s Address is not authorized", ip)
 		}
 
-		if !checkIpWhitelist(ip) {
-			return fmt.Errorf("The %s Address is not authorized!", ip)
+		if !checkIPWhitelist(ip) {
+			return fmt.Errorf("the %s Address is not authorized", ip)
 		}
 
 		funcName := strings.Split(info.FullMethod, "/")[len(strings.Split(info.FullMethod, "/"))-1]
 		if checkGrpcFuncBlacklist(funcName) || !checkGrpcFuncWhitelist(funcName) {
-			return fmt.Errorf("The %s method is not authorized!", funcName)
+			return fmt.Errorf("the %s method is not authorized", funcName)
 		}
 		return nil
 	}
-	return fmt.Errorf("Can't get remote ip!")
+	return fmt.Errorf("can't get remote ip")
 }
 
 type clientRequest struct {
 	Method string         `json:"method"`
 	Params [1]interface{} `json:"params"`
-	Id     uint64         `json:"id"`
+	ID     uint64         `json:"id"`
 }
 
-func parseJsonRpcParams(data []byte) (*clientRequest, error) {
+func parseJSONRpcParams(data []byte) (*clientRequest, error) {
 	var req clientRequest
 	err := json.Unmarshal(data, &req)
 	if err != nil {

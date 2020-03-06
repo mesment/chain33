@@ -7,7 +7,6 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"testing"
 
 	"github.com/33cn/chain33/common"
@@ -150,16 +149,12 @@ func TestVersionSetAndGet(t *testing.T) {
 	assert.Equal(t, v, []byte("v03"))
 
 	m.Trash(3)
-	v, err = m.GetV([]byte("k0"), 0)
+	_, err = m.GetV([]byte("k0"), 0)
 	assert.Equal(t, err, types.ErrNotFound)
 
 	v, err = m.GetV([]byte("k3"), 4)
 	assert.Nil(t, err)
 	assert.Equal(t, v, []byte("v3"))
-}
-
-func randBytes() []byte {
-	return hashN(rand.Int())
 }
 
 func hashN(n int) []byte {
@@ -192,23 +187,24 @@ func TestAddDelMVCC(t *testing.T) {
 		m.db.Set(v.Key, v.Value)
 	}
 
-	kvlist, err = m.AddMVCC(genkv(2), hashN(2), hashN(1), 1)
+	_, err = m.AddMVCC(genkv(2), hashN(2), hashN(1), 1)
 	assert.Equal(t, err, types.ErrPrevVersion)
 
-	kvlist, err = m.AddMVCC(genkv(2), hashN(2), hashN(0), 3)
-	assert.Equal(t, err, types.ErrPrevVersion)
+	//hash 2 还不存在
+	_, err = m.AddMVCC(genkv(2), hashN(2), hashN(0), 3)
+	assert.Equal(t, err, types.ErrNotFound)
 
-	kvlist, err = m.AddMVCC(genkv(2), hashN(2), hashN(3), 3)
+	_, err = m.AddMVCC(genkv(2), hashN(2), hashN(3), 3)
 	assert.Equal(t, err, types.ErrNotFound)
 
 	maxv, err := m.GetMaxVersion()
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), maxv)
 
-	kvlist, err = m.DelMVCC(hashN(2), 1, true)
+	_, err = m.DelMVCC(hashN(2), 1, true)
 	assert.Equal(t, err, types.ErrNotFound)
 
-	kvlist, err = m.DelMVCC(hashN(0), 0, true)
+	_, err = m.DelMVCC(hashN(0), 0, true)
 	assert.Equal(t, err, types.ErrCanOnlyDelTopVersion)
 
 	kvlist, err = m.DelMVCC(hashN(1), 1, true)

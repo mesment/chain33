@@ -109,12 +109,12 @@ function start() {
     ${CLI} block last_header
     ${CLI} net info
 
-    ${CLI} net peer_info
-    peersCount=$(${CLI} net peer_info | jq '.[] | length')
+    ${CLI} net peer
+    peersCount=$(${CLI} net peer | jq '.[] | length')
     echo "${peersCount}"
     if [ "${peersCount}" -lt 2 ]; then
         sleep 20
-        peersCount=$(${CLI} net peer_info | jq '.[] | length')
+        peersCount=$(${CLI} net peer | jq '.[] | length')
         echo "${peersCount}"
         if [ "${peersCount}" -lt 2 ]; then
             echo "peers error"
@@ -130,7 +130,7 @@ function start() {
     #fi
 
     echo "=========== # save seed to wallet ============="
-    result=$(${CLI} seed save -p 1314 -s "tortoise main civil member grace happy century convince father cage beach hip maid merry rib" | jq ".isok")
+    result=$(${CLI} seed save -p 1314fuzamei -s "tortoise main civil member grace happy century convince father cage beach hip maid merry rib" | jq ".isok")
     if [ "${result}" = "false" ]; then
         echo "save seed to wallet error seed, result: ${result}"
         exit 1
@@ -139,7 +139,7 @@ function start() {
     sleep 1
 
     echo "=========== # unlock wallet ============="
-    result=$(${CLI} wallet unlock -p 1314 -t 0 | jq ".isok")
+    result=$(${CLI} wallet unlock -p 1314fuzamei -t 0 | jq ".isok")
     if [ "${result}" = "false" ]; then
         exit 1
     fi

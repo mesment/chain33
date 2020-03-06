@@ -20,8 +20,6 @@ service chain33 {
     //交易接口
     rpc CreateRawTransaction(CreateTx) returns (UnsignTx) {}
     rpc CreateRawTxGroup(CreateTransactionGroup) returns (UnsignTx) {}
-    //发送签名后交易
-    rpc SendRawTransaction(SignedTx) returns (Reply) {}
     // 根据哈希查询交易
     rpc QueryTransaction(ReqHash) returns (TransactionDetail) {}
     // 发送交易
@@ -34,7 +32,7 @@ service chain33 {
     rpc GetTransactionByHashes(ReqHashes) returns (TransactionDetails) {}
 
     //缓存接口
-    rpc GetMemPool(ReqNil) returns (ReplyTxList) {}
+    rpc GetMemPool(ReqGetMempool) returns (ReplyTxList) {}
 
     //钱包接口
     //获取钱包账户信息
@@ -70,11 +68,11 @@ service chain33 {
     //给钱包解锁
     rpc UnLock(WalletUnLock) returns (Reply) {}
 
-    //获取当前节点连接的其他节点信息
-    rpc GetPeerInfo(ReqNil) returns (PeerList) {}
-
     //获取最新的Mempool
     rpc GetLastMemPool(ReqNil) returns (ReplyTxList) {}
+
+    //获取最新的ProperFee
+    rpc GetProperFee(ReqProperFee) returns (ReplyProperFee) {}
 
     // 获取钱包状态
     rpc GetWalletStatus(ReqNil) returns (WalletStatus) {}
@@ -106,34 +104,66 @@ service chain33 {
     // 导出私钥
     rpc DumpPrivkey(ReqString) returns (ReplyString) {}
 
+    // 导出全部私钥到文件
+    rpc DumpPrivkeysFile(ReqPrivkeysFile) returns (Reply) {}
+    // 从文件中批量导入私钥
+    rpc ImportPrivkeysFile(ReqPrivkeysFile) returns (Reply) {}
+
     //获取程序版本
-    rpc Version(ReqNil) returns (Reply) {}
+    rpc Version(ReqNil) returns (VersionInfo) {}
 
     //是否同步
     rpc IsSync(ReqNil) returns (Reply) {}
 
-    // ntpclock是否同步
-    rpc IsNtpClockSync(ReqNil) returns (Reply) {}
+    //获取当前节点连接的其他节点信息
+    rpc GetPeerInfo(P2PGetPeerReq) returns (PeerList) {}
 
     //获取当前节点的网络信息
-    rpc NetInfo(ReqNil) returns (NodeNetInfo) {}
+    rpc NetInfo(P2PGetNetInfoReq) returns (NodeNetInfo) {}
+
+    // ntpclock是否同步
+    rpc IsNtpClockSync(ReqNil) returns (Reply) {}
 
     //获取系统致命故障信息
     rpc GetFatalFailure(types.ReqNil) returns (Int32) {}
     rpc GetLastBlockSequence(ReqNil) returns (Int64) {}
 
-    //获取指定区间的block加载序列号信息
-    rpc GetBlockSequences(ReqBlocks) returns (BlockSequences) {}
+    // get add block's sequence by hash
+    rpc GetSequenceByHash(ReqHash) returns (Int64) {}
 
     //通过block hash 获取对应的blocks信息
     rpc GetBlockByHashes(ReqHashes) returns (BlockDetails) {}
+
+    //通过block seq 获取对应的blocks hash 信息
+    rpc GetBlockBySeq(Int64) returns (BlockSeq) {}
+
     //关闭chain33
     rpc CloseQueue(ReqNil) returns (Reply) {}
 
     //获取地址所以合约下的余额
-    rpc GetAllExecBalance(ReqAddr) returns (AllExecBalance) {}
+    rpc GetAllExecBalance(ReqAllExecBalance) returns (AllExecBalance) {}
     //签名交易
     rpc SignRawTx(ReqSignRawTx) returns (ReplySignRawTx) {}
 
     rpc CreateNoBalanceTransaction(NoBalanceTx) returns (ReplySignRawTx) {}
+
+    // 获取随机HASH
+    rpc QueryRandNum(ReqRandHash) returns (ReplyHash) {}
+
+    // 获取是否达到fork高度
+    rpc GetFork(ReqKey) returns (Int64) {}
+
+    rpc CreateNoBalanceTxs(NoBalanceTxs) returns (ReplySignRawTx) {}
+
+    //通过seq以及title获取对应平行连的交易
+    rpc GetParaTxByTitle(ReqParaTxByTitle) returns (ParaTxDetails) {}
+
+    //获取拥有此title交易的区块高度
+    rpc LoadParaTxByTitle(ReqHeightByTitle) returns (ReplyHeightByTitle) {}
+
+    //通过区块高度列表+title获取平行链交易
+    rpc GetParaTxByHeight(ReqParaTxByHeight) returns (ParaTxDetails) {}
+
+    //获取区块头信息
+    rpc GetHeaders(ReqBlocks) returns (Headers) {}
 }

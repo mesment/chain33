@@ -28,6 +28,7 @@ func init() {
 	registerDBCreator(ssDBBackendStr, dbCreator, false)
 }
 
+//SsdbBench ...
 type SsdbBench struct {
 	// 写次数
 	writeCount int
@@ -39,12 +40,16 @@ type SsdbBench struct {
 	readNum   int
 	readTime  time.Duration
 }
+
+//SsdbNode 节点
 type SsdbNode struct {
 	ip   string
 	port int
 }
+
+//GoSSDB db
 type GoSSDB struct {
-	TransactionDB
+	BaseDB
 	pool  *SDBPool
 	nodes []*SsdbNode
 }
@@ -98,6 +103,7 @@ func parseSsdbNode(url string) (nodes []*SsdbNode) {
 	return nodes
 }
 
+//NewGoSSDB new
 func NewGoSSDB(name string, dir string, cache int) (*GoSSDB, error) {
 	database := &GoSSDB{}
 	database.nodes = parseSsdbNode(dir)
@@ -118,6 +124,7 @@ func NewGoSSDB(name string, dir string, cache int) (*GoSSDB, error) {
 	return database, nil
 }
 
+//Get get
 func (db *GoSSDB) Get(key []byte) ([]byte, error) {
 	start := time.Now()
 
@@ -134,28 +141,7 @@ func (db *GoSSDB) Get(key []byte) ([]byte, error) {
 	return value.Bytes(), nil
 }
 
-func (db *GoSSDB) BatchGet(keys [][]byte) (values [][]byte, err error) {
-	start := time.Now()
-	var keylist = []string{}
-	for _, v := range keys {
-		keylist = append(keylist, string(v))
-	}
-	vals, err := db.pool.get().MultiGet(keylist...)
-	if err != nil {
-		//dlog.Error("Get value error", "error", err, "key", key, "keyhex", hex.EncodeToString(key), "keystr", string(key))
-		return nil, err
-	}
-	if vals == nil {
-		return nil, ErrNotFoundInDb
-	}
-
-	for _, v := range vals {
-		values = append(values, v.Bytes())
-	}
-	sdbBench.read(1, time.Since(start))
-	return values, nil
-}
-
+//Set 设置
 func (db *GoSSDB) Set(key []byte, value []byte) error {
 	start := time.Now()
 
@@ -168,10 +154,12 @@ func (db *GoSSDB) Set(key []byte, value []byte) error {
 	return nil
 }
 
+//SetSync 同步
 func (db *GoSSDB) SetSync(key []byte, value []byte) error {
 	return db.Set(key, value)
 }
 
+//Delete 删除
 func (db *GoSSDB) Delete(key []byte) error {
 	start := time.Now()
 
@@ -184,21 +172,26 @@ func (db *GoSSDB) Delete(key []byte) error {
 	return nil
 }
 
+//DeleteSync 删除同步
 func (db *GoSSDB) DeleteSync(key []byte) error {
 	return db.Delete(key)
 }
 
+//Close 关闭
 func (db *GoSSDB) Close() {
 	db.pool.close()
 }
 
+//Print 打印
 func (db *GoSSDB) Print() {
 }
 
+//Stats ...
 func (db *GoSSDB) Stats() map[string]string {
 	return make(map[string]string)
 }
 
+//Iterator 迭代器
 func (db *GoSSDB) Iterator(itbeg []byte, itend []byte, reverse bool) Iterator {
 	start := time.Now()
 
@@ -287,9 +280,9 @@ func (dbit *ssDBIt) cacheNextPage(begin string) bool {
 		dbit.index = 0
 		dbit.pageNo++
 		return true
-	} else {
-		return false
 	}
+	return false
+
 }
 
 func (dbit *ssDBIt) initKeys(begin, end string) bool {
@@ -319,9 +312,8 @@ func (dbit *ssDBIt) initKeys(begin, end string) bool {
 			dbit.nextPage = false
 		}
 		return true
-	} else {
-		return false
 	}
+	return false
 
 }
 
@@ -329,13 +321,13 @@ func (dbit *ssDBIt) Next() bool {
 	if len(dbit.keys) > dbit.index+1 {
 		dbit.index++
 		return true
-	} else {
-		// 如果有下一页数据，则自动抓取
-		if dbit.nextPage {
-			return dbit.cacheNextPage(dbit.tmpEnd)
-		}
-		return false
 	}
+	// 如果有下一页数据，则自动抓取
+	if dbit.nextPage {
+		return dbit.cacheNextPage(dbit.tmpEnd)
+	}
+	return false
+
 }
 
 func (dbit *ssDBIt) checkKeyCmp(key1, key2 string, reverse bool) bool {
@@ -363,8 +355,7 @@ func (dbit *ssDBIt) findInPage(key string) int {
 
 func (dbit *ssDBIt) Seek(key []byte) bool {
 	keyStr := string(key)
-	pos := -1
-	pos = dbit.findInPage(keyStr)
+	pos := dbit.findInPage(keyStr)
 
 	// 如果第一页已经找到，不会走入此逻辑
 	for pos == -1 && dbit.nextPage {
@@ -392,17 +383,17 @@ func (dbit *ssDBIt) Rewind() bool {
 		dbit.index = 0
 		dbit.pageNo = 0
 		return true
-	} else {
-		return false
 	}
+	return false
+
 }
 
 func (dbit *ssDBIt) Key() []byte {
 	if dbit.index >= 0 && dbit.index < len(dbit.keys) {
 		return []byte(dbit.keys[dbit.index])
-	} else {
-		return nil
 	}
+	return nil
+
 }
 func (dbit *ssDBIt) Value() []byte {
 	key := dbit.keys[dbit.index]
@@ -443,8 +434,10 @@ type ssDBBatch struct {
 	db       *GoSSDB
 	batchset map[string][]byte
 	batchdel map[string]bool
+	size     int
 }
 
+//NewBatch new
 func (db *GoSSDB) NewBatch(sync bool) Batch {
 	return &ssDBBatch{db: db, batchset: make(map[string][]byte), batchdel: make(map[string]bool)}
 }
@@ -452,12 +445,15 @@ func (db *GoSSDB) NewBatch(sync bool) Batch {
 func (db *ssDBBatch) Set(key, value []byte) {
 	db.batchset[string(key)] = value
 	delete(db.batchdel, string(key))
+	db.size += len(value)
+	db.size += len(key)
 }
 
 func (db *ssDBBatch) Delete(key []byte) {
 	db.batchset[string(key)] = []byte{}
 	delete(db.batchset, string(key))
 	db.batchdel[string(key)] = true
+	db.size += len(key)
 }
 
 // 注意本方法的实现逻辑，因为ssdb没有提供删除和更新同时进行的批量操作；
@@ -492,10 +488,16 @@ func (db *ssDBBatch) Write() error {
 }
 
 func (db *ssDBBatch) ValueSize() int {
+	return db.size
+}
+
+//ValueLen  batch数量
+func (db *ssDBBatch) ValueLen() int {
 	return len(db.batchset)
 }
 
 func (db *ssDBBatch) Reset() {
 	db.batchset = make(map[string][]byte)
 	db.batchdel = make(map[string]bool)
+	db.size = 0
 }

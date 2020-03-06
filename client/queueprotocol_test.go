@@ -8,13 +8,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/33cn/chain33/pluginmgr"
-	_ "github.com/33cn/chain33/system"
-
 	"github.com/33cn/chain33/client"
+	"github.com/33cn/chain33/common/version"
+	"github.com/33cn/chain33/pluginmgr"
 	"github.com/33cn/chain33/queue"
 	rpctypes "github.com/33cn/chain33/rpc/types"
+	_ "github.com/33cn/chain33/system"
 	"github.com/33cn/chain33/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +29,8 @@ var (
 func TestMain(m *testing.M) {
 	mock.grpcMock = &grpcMock
 	mock.jrpcMock = &jrpc
-	pluginmgr.InitExec(nil)
+	cfg := types.NewChain33Config(types.GetDefaultCfgstring())
+	pluginmgr.InitExec(cfg)
 	api = mock.startup(0)
 	flag := m.Run()
 	mock.stop()
@@ -40,19 +42,21 @@ func TestQueueProtocolAPI(t *testing.T) {
 	option.SendTimeout = 100
 	option.WaitTimeout = 200
 
-	qc, err := client.New(nil, nil)
+	_, err := client.New(nil, nil)
 	if err == nil {
 		t.Error("client.New(nil, nil) need return error")
 	}
 
 	var q = queue.New("channel")
-	qc, err = client.New(q.Client(), &option)
+	qc, err := client.New(q.Client(), &option)
 	if err != nil {
 		t.Errorf("client.New() cause error %v", err)
 	}
 	if qc == nil {
 		t.Error("queueprotoapi object is nil")
 	}
+	_, err = qc.Notify("", 1, "data")
+	assert.Nil(t, err)
 
 }
 
@@ -64,36 +68,45 @@ func TestQueueProtocol(t *testing.T) {
 	testQueryTx(t, api)
 	testGetTransactionByHash(t, api)
 	testGetMempool(t, api)
-	testWalletGetAccountList(t, api)
-	testNewAccount(t, api)
-	testWalletTransactionList(t, api)
-	testWalletImportprivkey(t, api)
-	testWalletSendToAddress(t, api)
-	testWalletSetFee(t, api)
-	testWalletSetLabel(t, api)
-	testWalletMergeBalance(t, api)
-	testWalletSetPasswd(t, api)
-	testWalletLock(t, api)
-	testWalletUnLock(t, api)
 	testPeerInfo(t, api)
 	testGetHeaders(t, api)
 	testGetLastMempool(t, api)
+	testGetProperFee(t, api)
 	testGetBlockOverview(t, api)
 	testGetAddrOverview(t, api)
 	testGetBlockHash(t, api)
-	testGenSeed(t, api)
-	testSaveSeed(t, api)
-	testGetSeed(t, api)
-	testGetWalletStatus(t, api)
-	testDumpPrivkey(t, api)
+	testGetBlockByHashes(t, api)
+	testGetBlockSequences(t, api)
+	testAddSeqCallBack(t, api)
+	testListSeqCallBack(t, api)
+	testGetSeqCallBackLastNum(t, api)
+	testGetLastBlockSequence(t, api)
 	testIsSync(t, api)
 	testIsNtpClockSync(t, api)
 	testLocalGet(t, api)
+	testLocalTransaction(t, api)
 	testLocalList(t, api)
 	testGetLastHeader(t, api)
-	testSignRawTx(t, api)
+	testStoreSet(t, api)
+	testStoreGet(t, api)
+	testStoreMemSet(t, api)
+	testStoreCommit(t, api)
+	testStoreRollback(t, api)
+	testStoreDel(t, api)
 	testStoreGetTotalCoins(t, api)
+	testStoreList(t, api)
 	testBlockChainQuery(t, api)
+	testQueryConsensus(t, api)
+	testExecWalletFunc(t, api)
+	testGetSequenceByHash(t, api)
+}
+
+func testGetSequenceByHash(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.GetSequenceByHash(nil)
+	assert.Equal(t, types.ErrInvalidParam, err)
+	res, err := api.GetSequenceByHash(&types.ReqHash{})
+	assert.Nil(t, err)
+	assert.Equal(t, &types.Int64{Data: 1}, res)
 }
 
 func testBlockChainQuery(t *testing.T, api client.QueueProtocolAPI) {
@@ -115,6 +128,172 @@ func testBlockChainQuery(t *testing.T, api client.QueueProtocolAPI) {
 		require.Equalf(t, err, test.actualErr, "testBlockChainQuery case index %d", index)
 		require.Equalf(t, res, test.actualRes, "testBlockChainQuery case index %d", index)
 	}
+
+	_, err := api.Query("", "", nil)
+	assert.EqualError(t, types.ErrInvalidParam, err.Error())
+	res, err := api.Query("", "", testCases[1].param)
+	assert.Nil(t, err)
+	assert.Equal(t, res, testCases[1].actualRes)
+}
+
+func testQueryConsensus(t *testing.T, api client.QueueProtocolAPI) {
+	testCases := []struct {
+		param     *types.ChainExecutor
+		actualRes types.Message
+		actualErr error
+	}{
+		{
+			actualErr: types.ErrInvalidParam,
+		},
+		{
+			param:     &types.ChainExecutor{},
+			actualRes: &types.Reply{},
+		},
+	}
+	for index, test := range testCases {
+		res, err := api.QueryConsensus(test.param)
+		require.Equalf(t, err, test.actualErr, "testQueryConsensus case index %d", index)
+		require.Equalf(t, res, test.actualRes, "testQueryConsensus case index %d", index)
+	}
+
+	_, err := api.QueryConsensusFunc("", "", nil)
+	assert.EqualError(t, types.ErrInvalidParam, err.Error())
+	res, err := api.QueryConsensusFunc("", "", testCases[1].param)
+	assert.Nil(t, err)
+	assert.Equal(t, res, testCases[1].actualRes)
+}
+
+func testExecWalletFunc(t *testing.T, api client.QueueProtocolAPI) {
+	testCases := []struct {
+		param     *types.ChainExecutor
+		actualRes types.Message
+		actualErr error
+	}{
+		{
+			actualErr: types.ErrInvalidParam,
+		},
+		{
+			param:     &types.ChainExecutor{},
+			actualRes: &types.Reply{},
+		},
+	}
+	for index, test := range testCases {
+		res, err := api.ExecWallet(test.param)
+		require.Equalf(t, err, test.actualErr, "testQueryConsensus case index %d", index)
+		require.Equalf(t, res, test.actualRes, "testQueryConsensus case index %d", index)
+	}
+
+	_, err := api.ExecWalletFunc("", "", nil)
+	assert.EqualError(t, types.ErrInvalidParam, err.Error())
+	res, err := api.ExecWalletFunc("", "", testCases[1].param)
+	assert.Nil(t, err)
+	assert.Equal(t, res, testCases[1].actualRes)
+}
+
+func testGetBlockByHashes(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.GetBlockByHashes(nil)
+	assert.EqualError(t, types.ErrInvalidParam, err.Error())
+	res, err := api.GetBlockByHashes(&types.ReqHashes{Hashes: [][]byte{}})
+	assert.Nil(t, err)
+	assert.Equal(t, &types.BlockDetails{}, res)
+}
+
+func testGetBlockSequences(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.GetBlockSequences(nil)
+	assert.EqualError(t, types.ErrInvalidParam, err.Error())
+	res, err := api.GetBlockSequences(&types.ReqBlocks{Start: 0, End: 1})
+	assert.Nil(t, err)
+	assert.Equal(t, &types.BlockSequences{}, res)
+}
+
+func testAddSeqCallBack(t *testing.T, api client.QueueProtocolAPI) {
+	res, err := api.AddSeqCallBack(&types.BlockSeqCB{})
+	assert.Nil(t, err)
+	assert.Equal(t, &types.ReplyAddSeqCallback{}, res)
+}
+
+func testListSeqCallBack(t *testing.T, api client.QueueProtocolAPI) {
+	res, err := api.ListSeqCallBack()
+	assert.Nil(t, err)
+	assert.Equal(t, &types.BlockSeqCBs{}, res)
+}
+
+func testGetSeqCallBackLastNum(t *testing.T, api client.QueueProtocolAPI) {
+	res, err := api.GetSeqCallBackLastNum(&types.ReqString{})
+	assert.Nil(t, err)
+	assert.Equal(t, &types.Int64{}, res)
+}
+
+func testStoreSet(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreSet(&types.StoreSetWithSync{})
+	if err != nil {
+		t.Error("Call StoreSet Failed.", err)
+	}
+
+	_, err = api.StoreSet(nil)
+	if err == nil {
+		t.Error("StoreSet(nil) need return error.")
+	}
+}
+
+func testStoreGet(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreGet(&types.StoreGet{})
+	if err != nil {
+		t.Error("Call StoreGet Failed.", err)
+	}
+
+	_, err = api.StoreGet(nil)
+	if err == nil {
+		t.Error("StoreGet(nil) need return error.")
+	}
+}
+
+func testStoreMemSet(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreMemSet(&types.StoreSetWithSync{})
+	if err != nil {
+		t.Error("Call StoreMemSet Failed.", err)
+	}
+
+	_, err = api.StoreMemSet(nil)
+	if err == nil {
+		t.Error("StoreMemSet(nil) need return error.")
+	}
+}
+
+func testStoreCommit(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreCommit(&types.ReqHash{})
+	if err != nil {
+		t.Error("Call StoreCommit Failed.", err)
+	}
+
+	_, err = api.StoreCommit(nil)
+	if err == nil {
+		t.Error("StoreCommit(nil) need return error.")
+	}
+}
+
+func testStoreRollback(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreRollback(&types.ReqHash{})
+	if err != nil {
+		t.Error("Call StoreRollback Failed.", err)
+	}
+
+	_, err = api.StoreRollback(nil)
+	if err == nil {
+		t.Error("StoreRollback(nil) need return error.")
+	}
+}
+
+func testStoreDel(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreDel(&types.StoreDel{})
+	if err != nil {
+		t.Error("Call StoreDel Failed.", err)
+	}
+
+	_, err = api.StoreDel(nil)
+	if err == nil {
+		t.Error("StoreDel(nil) need return error.")
+	}
 }
 
 func testStoreGetTotalCoins(t *testing.T, api client.QueueProtocolAPI) {
@@ -132,18 +311,15 @@ func testStoreGetTotalCoins(t *testing.T, api client.QueueProtocolAPI) {
 	}
 }
 
-func testSignRawTx(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.SignRawTx(&types.ReqSignRawTx{})
-	if err != nil {
-		t.Error("Call SignRawTx Failed.", err)
-	}
-	_, err = api.SignRawTx(nil)
+func testStoreList(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.StoreList(&types.StoreList{})
 	if err == nil {
-		t.Error("SignRawTx(nil) need return error.")
+		t.Error("Call StoreList Failed.", err)
 	}
-	_, err = api.SignRawTx(&types.ReqSignRawTx{Addr: "case1"})
+
+	_, err = api.StoreList(nil)
 	if err == nil {
-		t.Error("SignRawTx(&types.ReqStr{Addr:\"case1\"}) need return error.")
+		t.Error("StoreList(nil) need return error.")
 	}
 }
 
@@ -176,6 +352,29 @@ func testLocalList(t *testing.T, api client.QueueProtocolAPI) {
 	}
 }
 
+func testLocalTransaction(t *testing.T, api client.QueueProtocolAPI) {
+	txid, err := api.LocalNew(nil)
+	assert.Nil(t, err)
+	assert.Equal(t, txid.Data, int64(9999))
+	err = api.LocalBegin(txid)
+	assert.Nil(t, err)
+	err = api.LocalCommit(nil)
+	assert.Equal(t, types.ErrInvalidParam, err)
+	err = api.LocalCommit(txid)
+	assert.Nil(t, err)
+	err = api.LocalRollback(nil)
+	assert.Equal(t, types.ErrInvalidParam, err)
+	err = api.LocalRollback(txid)
+	assert.Nil(t, err)
+	err = api.LocalSet(nil)
+	assert.Equal(t, types.ErrInvalidParam, err)
+	param := &types.LocalDBSet{Txid: txid.Data}
+	err = api.LocalSet(param)
+	assert.Nil(t, err)
+	err = api.LocalClose(txid)
+	assert.Nil(t, err)
+}
+
 func testIsNtpClockSync(t *testing.T, api client.QueueProtocolAPI) {
 	_, err := api.IsNtpClockSync()
 	if err != nil {
@@ -187,73 +386,6 @@ func testIsSync(t *testing.T, api client.QueueProtocolAPI) {
 	_, err := api.IsSync()
 	if err != nil {
 		t.Error("Call IsSync Failed.", err)
-	}
-}
-
-func testDumpPrivkey(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.DumpPrivkey(&types.ReqString{})
-	if err != nil {
-		t.Error("Call DumpPrivkey Failed.", err)
-	}
-	_, err = api.DumpPrivkey(nil)
-	if err == nil {
-		t.Error("DumpPrivkey(nil) need return error.")
-	}
-	_, err = api.DumpPrivkey(&types.ReqString{Data: "case1"})
-	if err == nil {
-		t.Error("DumpPrivkey(&types.ReqStr{ReqStr:\"case1\"}) need return error.")
-	}
-}
-
-func testGetWalletStatus(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.GetWalletStatus()
-	if err != nil {
-		t.Error("Call GetWalletStatus Failed.", err)
-	}
-}
-
-func testGetSeed(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.GetSeed(&types.GetSeedByPw{})
-	if err != nil {
-		t.Error("Call GetSeed Failed.", err)
-	}
-	_, err = api.GetSeed(nil)
-	if err == nil {
-		t.Error("GetSeed(nil) need return error.")
-	}
-	_, err = api.GetSeed(&types.GetSeedByPw{Passwd: "case1"})
-	if err == nil {
-		t.Error("GetSeed(&types.GetSeedByPw{Passwd:\"case1\"}) need return error.")
-	}
-}
-
-func testSaveSeed(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.SaveSeed(&types.SaveSeedByPw{})
-	if err != nil {
-		t.Error("Call SaveSeed Failed.", err)
-	}
-	_, err = api.SaveSeed(nil)
-	if err == nil {
-		t.Error("SaveSeed(nil) need return error.")
-	}
-	_, err = api.SaveSeed(&types.SaveSeedByPw{Seed: "case1"})
-	if err == nil {
-		t.Error("SaveSeed(&types.SaveSeedByPw{Seed:\"case1\"}) need return error.")
-	}
-}
-
-func testGenSeed(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.GenSeed(&types.GenSeedLang{})
-	if err != nil {
-		t.Error("Call GenSeed Failed.", err)
-	}
-	_, err = api.GenSeed(nil)
-	if err == nil {
-		t.Error("GenSeed(nil) need return error.")
-	}
-	_, err = api.GenSeed(&types.GenSeedLang{Lang: 10})
-	if err == nil {
-		t.Error("GenSeed(&types.GenSeedLang{Lang:10}) need return error.")
 	}
 }
 
@@ -309,6 +441,17 @@ func testGetLastMempool(t *testing.T, api client.QueueProtocolAPI) {
 	}
 }
 
+func testGetProperFee(t *testing.T, api client.QueueProtocolAPI) {
+	_, err := api.GetProperFee(nil)
+	if err != nil {
+		t.Error("Call GetProperFee Failed.", err)
+	}
+	_, err = api.GetProperFee(&types.ReqProperFee{})
+	if err != nil {
+		t.Error("Call GetProperFee Failed.", err)
+	}
+}
+
 func testGetHeaders(t *testing.T, api client.QueueProtocolAPI) {
 	_, err := api.GetHeaders(&types.ReqBlocks{})
 	if err != nil {
@@ -325,164 +468,15 @@ func testGetHeaders(t *testing.T, api client.QueueProtocolAPI) {
 }
 
 func testPeerInfo(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.PeerInfo()
+	_, err := api.PeerInfo(&types.P2PGetPeerReq{})
 	if err != nil {
 		t.Error("Call PeerInfo Failed.", err)
 	}
 }
 
-func testWalletUnLock(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletUnLock(&types.WalletUnLock{})
-	if err != nil {
-		t.Error("Call WalletUnLock Failed.", err)
-	}
-	_, err = api.WalletUnLock(nil)
-	if err == nil {
-		t.Error("WalletUnLock(nil) need return error.")
-	}
-	_, err = api.WalletUnLock(&types.WalletUnLock{Passwd: "case1"})
-	if err == nil {
-		t.Error("WalletUnLock(&types.WalletUnLock{Passwd:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletLock(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletLock()
-	if err != nil {
-		t.Error("Call WalletLock Failed.", err)
-	}
-}
-
-func testWalletSetPasswd(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletSetPasswd(&types.ReqWalletSetPasswd{})
-	if err != nil {
-		t.Error("Call WalletSetPasswd Failed.", err)
-	}
-	_, err = api.WalletSetPasswd(nil)
-	if err == nil {
-		t.Error("WalletSetPasswd(nil) need return error.")
-	}
-	_, err = api.WalletSetPasswd(&types.ReqWalletSetPasswd{OldPass: "case1"})
-	if err == nil {
-		t.Error("WalletSetPasswd(&types.ReqWalletSetPasswd{OldPass:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletMergeBalance(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletMergeBalance(&types.ReqWalletMergeBalance{})
-	if err != nil {
-		t.Error("Call WalletMergeBalance Failed.", err)
-	}
-	_, err = api.WalletMergeBalance(nil)
-	if err == nil {
-		t.Error("WalletMergeBalance(nil) need return error.")
-	}
-	_, err = api.WalletMergeBalance(&types.ReqWalletMergeBalance{To: "case1"})
-	if err == nil {
-		t.Error("WalletMergeBalance(&types.ReqWalletMergeBalance{To:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletSetLabel(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletSetLabel(&types.ReqWalletSetLabel{})
-	if err != nil {
-		t.Error("Call WalletSetLabel Failed.", err)
-	}
-	_, err = api.WalletSetLabel(nil)
-	if err == nil {
-		t.Error("WalletSetLabel(nil) need return error.")
-	}
-	_, err = api.WalletSetLabel(&types.ReqWalletSetLabel{Label: "case1"})
-	if err == nil {
-		t.Error("WalletSetLabel(&types.ReqWalletSetLabel{Label:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletSetFee(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletSetFee(&types.ReqWalletSetFee{})
-	if err != nil {
-		t.Error("Call WalletSetFee Failed.", err)
-	}
-	_, err = api.WalletSetFee(nil)
-	if err == nil {
-		t.Error("WalletSetFee(nil) need return error.")
-	}
-	_, err = api.WalletSetFee(&types.ReqWalletSetFee{Amount: 1000})
-	if err == nil {
-		t.Error("WalletSetFee(&types.ReqWalletSetFee{Amount:1000}) need return error.")
-	}
-}
-
-func testWalletSendToAddress(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletSendToAddress(&types.ReqWalletSendToAddress{})
-	if err != nil {
-		t.Error("Call WalletSendToAddress Failed.", err)
-	}
-	_, err = api.WalletSendToAddress(nil)
-	if err == nil {
-		t.Error("WalletSendToAddress(nil) need return error.")
-	}
-	_, err = api.WalletSendToAddress(&types.ReqWalletSendToAddress{Note: "case1"})
-	if err == nil {
-		t.Error("WalletSendToAddress(&types.ReqWalletSendToAddress{Note:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletImportprivkey(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletImportprivkey(&types.ReqWalletImportPrivkey{})
-	if err != nil {
-		t.Error("Call WalletTransactionList Failed.", err)
-	}
-	_, err = api.WalletImportprivkey(nil)
-	if err == nil {
-		t.Error("WalletImportprivkey(nil) need return error.")
-	}
-	_, err = api.WalletImportprivkey(&types.ReqWalletImportPrivkey{Label: "case1"})
-	if err == nil {
-		t.Error("WalletImportprivkey(&types.ReqWalletImportPrivKey{Label:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletTransactionList(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.WalletTransactionList(&types.ReqWalletTransactionList{})
-	if err != nil {
-		t.Error("Call WalletTransactionList Failed.", err)
-	}
-	_, err = api.WalletTransactionList(nil)
-	if err == nil {
-		t.Error("WalletTransactionList(nil) need return error.")
-	}
-	_, err = api.WalletTransactionList(&types.ReqWalletTransactionList{Direction: 1})
-	if err == nil {
-		t.Error("WalletTransactionList(&types.ReqWalletTransactionList{Direction:1}) need return error.")
-	}
-}
-
-func testNewAccount(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.NewAccount(&types.ReqNewAccount{})
-	if err != nil {
-		t.Error("Call NewAccount Failed.", err)
-	}
-	_, err = api.NewAccount(nil)
-	if err == nil {
-		t.Error("NewAccount(nil) need return error.")
-	}
-	_, err = api.NewAccount(&types.ReqNewAccount{Label: "case1"})
-	if err == nil {
-		t.Error("NewAccount(&types.ReqNewAccount{Label:\"case1\"}) need return error.")
-	}
-}
-
-func testWalletGetAccountList(t *testing.T, api client.QueueProtocolAPI) {
-	req := types.ReqAccountList{WithoutBalance: true}
-	_, err := api.WalletGetAccountList(&req)
-	if err != nil {
-		t.Error("Call WalletGetAccountList Failed.", err)
-	}
-}
-
 func testGetMempool(t *testing.T, api client.QueueProtocolAPI) {
-	_, err := api.GetMempool()
+	req := types.ReqGetMempool{IsAll: false}
+	_, err := api.GetMempool(&req)
 	if err != nil {
 		t.Error("Call GetMempool Failed.", err)
 	}
@@ -553,6 +547,12 @@ func testGetBlocks(t *testing.T, api client.QueueProtocolAPI) {
 	}
 }
 
+func testGetLastBlockSequence(t *testing.T, api client.QueueProtocolAPI) {
+	res, err := api.GetLastBlockSequence()
+	assert.Nil(t, err)
+	assert.Equal(t, &types.Int64{}, res)
+}
+
 func testGetTxList(t *testing.T, api client.QueueProtocolAPI) {
 	_, err := api.GetTxList(&types.TxHashList{})
 	if err != nil {
@@ -588,128 +588,155 @@ func testSendTx(t *testing.T, api client.QueueProtocolAPI) {
 }
 
 func TestJsonRPC(t *testing.T) {
-	testGetBlocksJsonRPC(t, &jrpc)
-	testGetBlockOverviewJsonRPC(t, &jrpc)
-	testGetBlockHashJsonRPC(t, &jrpc)
-	testGetHeadersCmdJsonRPC(t, &jrpc)
-	testGetLastHeaderJsonRPC(t, &jrpc)
-	testGetMempoolJsonRPC(t, &jrpc)
-	testGetLastMemPoolJsonRPC(t, &jrpc)
-	testGenSeedsonRPC(t, &jrpc)
-	testGetPeerInfoJsonRPC(t, &jrpc)
-	testIsNtpClockSyncJsonRPC(t, &jrpc)
-	testIsSyncJsonRPC(t, &jrpc)
-	testGetNetInfoJsonRPC(t, &jrpc)
-	testGetWalletStatusJsonRPC(t, &jrpc)
-	testDumpPrivkeyJsonRPC(t, &jrpc)
-	testGetAccountsJsonRPC(t, &jrpc)
+	testGetBlocksJSONRPC(t, &jrpc)
+	testGetBlockOverviewJSONRPC(t, &jrpc)
+	testGetBlockHashJSONRPC(t, &jrpc)
+	testGetHeadersCmdJSONRPC(t, &jrpc)
+	testGetLastHeaderJSONRPC(t, &jrpc)
+	testGetMempoolJSONRPC(t, &jrpc)
+	testGetLastMemPoolJSONRPC(t, &jrpc)
+	testGetProperFeeJSONRPC(t, &jrpc)
+	testGenSeedJSONRPC(t, &jrpc)
+	testGetPeerInfoJSONRPC(t, &jrpc)
+	testIsNtpClockSyncJSONRPC(t, &jrpc)
+	testIsSyncJSONRPC(t, &jrpc)
+	testGetNetInfoJSONRPC(t, &jrpc)
+	testGetWalletStatusJSONRPC(t, &jrpc)
+	testDumpPrivkeyJSONRPC(t, &jrpc)
+	testDumpPrivkeysFileJSONRPC(t, &jrpc)
+	testImportPrivkeysFileJSONRPC(t, &jrpc)
+	testGetAccountsJSONRPC(t, &jrpc)
 }
 
-func testGetAccountsJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetAccountsJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res rpctypes.WalletAccounts
-	err := rpc.newRpcCtx("Chain33.GetAccounts", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("Chain33.GetAccounts", &types.ReqNil{}, &res)
 	if err != nil {
-		t.Error("testGetAccountsJsonRPC Failed.", err)
+		t.Error("testGetAccountsJSONRPC Failed.", err)
 	}
 }
 
-func testDumpPrivkeyJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testDumpPrivkeyJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res types.ReplyString
-	err := rpc.newRpcCtx("Chain33.DumpPrivkey", &types.ReqString{}, &res)
+	err := rpc.newRPCCtx("Chain33.DumpPrivkey", &types.ReqString{}, &res)
 	if err != nil {
-		t.Error("testDumpPrivkeyJsonRPC Failed.", err)
+		t.Error("testDumpPrivkeyJSONRPC Failed.", err)
 	}
 }
 
-func testGetWalletStatusJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
-	var res rpctypes.WalletStatus
-	err := rpc.newRpcCtx("Chain33.GetWalletStatus", &types.ReqNil{}, &res)
+func testDumpPrivkeysFileJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
+	var res rpctypes.Reply
+	err := rpc.newRPCCtx("Chain33.DumpPrivkeysFile", &types.ReqPrivkeysFile{}, &res)
 	if err != nil {
-		t.Error("testGetWalletStatusJsonRPC Failed.", err)
+		t.Error("testDumpPrivkeysFileJSONRPC Failed.", err)
+	}
+}
+
+func testImportPrivkeysFileJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
+	var res rpctypes.Reply
+	err := rpc.newRPCCtx("Chain33.ImportPrivkeysFile", &types.ReqPrivkeysFile{}, &res)
+	if err != nil {
+		t.Error("testImportPrivkeysFileJSONRPC Failed.", err)
+	}
+}
+
+func testGetWalletStatusJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
+	var res rpctypes.WalletStatus
+	err := rpc.newRPCCtx("Chain33.GetWalletStatus", &types.ReqNil{}, &res)
+	if err != nil {
+		t.Error("testGetWalletStatusJSONRPC Failed.", err)
 	} else {
 		if res.IsTicketLock || res.IsAutoMining || !res.IsHasSeed || !res.IsWalletLock {
-			t.Error("testGetWalletStatusJsonRPC return type error.")
-
+			t.Error("testGetWalletStatusJSONRPC return type error.")
 		}
 	}
 }
 
-func testGetNetInfoJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetNetInfoJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res rpctypes.NodeNetinfo
-	err := rpc.newRpcCtx("Chain33.GetNetInfo",
-		nil, &res)
+	err := rpc.newRPCCtx("Chain33.GetNetInfo",
+		types.P2PGetNetInfoReq{}, &res)
 	if err != nil {
-		t.Error("testGetNetInfoJsonRPC failed. Error", err)
+		t.Error("testGetNetInfoJSONRPC failed. Error", err)
 	}
 }
 
-func testIsSyncJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testIsSyncJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res bool
-	err := rpc.newRpcCtx("Chain33.IsSync",
+	err := rpc.newRPCCtx("Chain33.IsSync",
 		nil, &res)
 	if err != nil {
-		t.Error("testIsSyncJsonRPC failed. Error", err)
+		t.Error("testIsSyncJSONRPC failed. Error", err)
 	}
 }
 
-func testIsNtpClockSyncJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testIsNtpClockSyncJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res bool
-	err := rpc.newRpcCtx("Chain33.IsNtpClockSync",
+	err := rpc.newRPCCtx("Chain33.IsNtpClockSync",
 		nil, &res)
 	if err != nil {
-		t.Error("testIsNtpClockSyncJsonRPC failed. Error", err)
+		t.Error("testIsNtpClockSyncJSONRPC failed. Error", err)
 	}
 }
 
-func testGetPeerInfoJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetPeerInfoJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res types.PeerList
-	err := rpc.newRpcCtx("Chain33.GetPeerInfo",
-		nil, &res)
+	err := rpc.newRPCCtx("Chain33.GetPeerInfo",
+		types.P2PGetPeerReq{}, &res)
 	if err != nil {
-		t.Error("testGetPeerInfoJsonRPC failed. Error", err)
+		t.Error("testGetPeerInfoJSONRPC failed. Error", err)
 	}
 }
 
-func testGenSeedsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGenSeedJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	params := types.GenSeedLang{
 		Lang: 1,
 	}
 	var res types.ReplySeed
-	err := rpc.newRpcCtx("Chain33.GenSeed",
+	err := rpc.newRPCCtx("Chain33.GenSeed",
 		params, &res)
 	if err != nil {
-		t.Error("testGenSeedsonRPC failed. Error", err)
+		t.Error("testGenSeedJSONRPC failed. Error", err)
 	}
 }
 
-func testGetLastMemPoolJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetLastMemPoolJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res rpctypes.ReplyTxList
-	err := rpc.newRpcCtx("Chain33.GetLastMemPool",
+	err := rpc.newRPCCtx("Chain33.GetLastMemPool",
 		nil, &res)
 	if err != nil {
-		t.Error("testGetLastMemPoolJsonRPC failed. Error", err)
+		t.Error("testGetLastMemPoolJSONRPC failed. Error", err)
 	}
 }
 
-func testGetMempoolJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
-	var res rpctypes.ReplyTxList
-	err := rpc.newRpcCtx("Chain33.GetMempool",
+func testGetProperFeeJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
+	var res rpctypes.ReplyProperFee
+	err := rpc.newRPCCtx("Chain33.GetProperFee",
 		nil, &res)
 	if err != nil {
-		t.Error("testGetMempoolJsonRPC failed. Error", err)
+		t.Error("testGetProperFeeJSONRPC failed. Error", err)
 	}
 }
 
-func testGetLastHeaderJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetMempoolJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
+	var res rpctypes.ReplyTxList
+	err := rpc.newRPCCtx("Chain33.GetMempool",
+		nil, &res)
+	if err != nil {
+		t.Error("testGetMempoolJSONRPC failed. Error", err)
+	}
+}
+
+func testGetLastHeaderJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	var res rpctypes.Header
-	err := rpc.newRpcCtx("Chain33.GetLastHeader",
+	err := rpc.newRPCCtx("Chain33.GetLastHeader",
 		nil, &res)
 	if err != nil {
-		t.Error("testGetLastHeaderJsonRPC failed. Error", err)
+		t.Error("testGetLastHeaderJSONRPC failed. Error", err)
 	}
 }
 
-func testGetHeadersCmdJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetHeadersCmdJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	params := types.ReqBlocks{
 		Start:    1,
 		End:      1,
@@ -717,27 +744,27 @@ func testGetHeadersCmdJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
 	}
 
 	var res rpctypes.Headers
-	err := rpc.newRpcCtx("Chain33.GetHeaders",
+	err := rpc.newRPCCtx("Chain33.GetHeaders",
 		params, &res)
 	if err != nil {
-		t.Error("testGetHeadersCmdJsonRPC failed. Error", err)
+		t.Error("testGetHeadersCmdJSONRPC failed. Error", err)
 	}
 }
 
-func testGetBlockOverviewJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetBlockOverviewJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	params := rpctypes.QueryParm{
 		Hash: "0x67c58d6ba9175313f0468ae4e0ddec946549af7748037c2fdd5d54298afd20b6",
 	}
 
 	var res rpctypes.BlockOverview
-	err := rpc.newRpcCtx("Chain33.GetBlockOverview",
+	err := rpc.newRPCCtx("Chain33.GetBlockOverview",
 		params, &res)
 	if err != nil {
-		t.Error("testGetBlockOverviewJsonRPC failed. Error", err)
+		t.Error("testGetBlockOverviewJSONRPC failed. Error", err)
 	}
 }
 
-func testGetBlocksJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetBlocksJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	params := rpctypes.BlockParam{
 		Start:    100,
 		End:      1000,
@@ -745,22 +772,22 @@ func testGetBlocksJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
 	}
 
 	var res rpctypes.BlockDetails
-	err := rpc.newRpcCtx("Chain33.GetBlocks",
+	err := rpc.newRPCCtx("Chain33.GetBlocks",
 		params, &res)
 	if err != nil {
-		t.Error("testGetBlocksJsonRPC failed. Error", err)
+		t.Error("testGetBlocksJSONRPC failed. Error", err)
 	}
 }
 
-func testGetBlockHashJsonRPC(t *testing.T, rpc *mockJRPCSystem) {
+func testGetBlockHashJSONRPC(t *testing.T, rpc *mockJRPCSystem) {
 	params := types.ReqInt{
 		Height: 100,
 	}
 	var res rpctypes.ReplyHash
-	err := rpc.newRpcCtx("Chain33.GetBlockHash",
+	err := rpc.newRPCCtx("Chain33.GetBlockHash",
 		params, &res)
 	if err != nil {
-		t.Error("testGetBlockHashJsonRPC failed. Error", err)
+		t.Error("testGetBlockHashJSONRPC failed. Error", err)
 	}
 }
 
@@ -769,7 +796,6 @@ func TestGRPC(t *testing.T) {
 	testGetBlocksGRPC(t, &grpcMock)
 	testGetLastHeaderGRPC(t, &grpcMock)
 	testCreateRawTransactionGRPC(t, &grpcMock)
-	testSendRawTransactionGRPC(t, &grpcMock)
 	testQueryTransactionGRPC(t, &grpcMock)
 	testSendTransactionGRPC(t, &grpcMock)
 	testGetTransactionByAddrGRPC(t, &grpcMock)
@@ -788,10 +814,13 @@ func TestGRPC(t *testing.T) {
 	testUnLockGRPC(t, &grpcMock)
 	testGetPeerInfoGRPC(t, &grpcMock)
 	testGetLastMemPoolGRPC(t, &grpcMock)
+	testGetProperFeeGRPC(t, &grpcMock)
 	testGetWalletStatusGRPC(t, &grpcMock)
 	testGetBlockOverviewGRPC(t, &grpcMock)
 	testGetAddrOverviewGRPC(t, &grpcMock)
 	testGetBlockHashGRPC(t, &grpcMock)
+	testGetSequenceByHashGRPC(t, &grpcMock)
+	testGetBlockBySeqGRPC(t, &grpcMock)
 	testGenSeedGRPC(t, &grpcMock)
 	testGetSeedGRPC(t, &grpcMock)
 	testSaveSeedGRPC(t, &grpcMock)
@@ -799,15 +828,20 @@ func TestGRPC(t *testing.T) {
 	testQueryChainGRPC(t, &grpcMock)
 	testGetHexTxByHashGRPC(t, &grpcMock)
 	testDumpPrivkeyGRPC(t, &grpcMock)
+	testDumpPrivkeysFileGRPC(t, &grpcMock)
+	testImportPrivkeysFileGRPC(t, &grpcMock)
 	testVersionGRPC(t, &grpcMock)
 	testIsSyncGRPC(t, &grpcMock)
 	testIsNtpClockSyncGRPC(t, &grpcMock)
 	testNetInfoGRPC(t, &grpcMock)
+	testGetParaTxByTitleGRPC(t, &grpcMock)
+	testLoadParaTxByTitleGRPC(t, &grpcMock)
+	testGetParaTxByHeightGRPC(t, &grpcMock)
 }
 
 func testNetInfoGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.NodeNetInfo
-	err := rpc.newRpcCtx("NetInfo", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("NetInfo", &types.P2PGetNetInfoReq{}, &res)
 	if err != nil {
 		t.Error("Call NetInfo Failed.", err)
 	}
@@ -815,7 +849,7 @@ func testNetInfoGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testIsNtpClockSyncGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("IsNtpClockSync", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("IsNtpClockSync", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call IsNtpClockSync Failed.", err)
 	}
@@ -823,31 +857,48 @@ func testIsNtpClockSyncGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testIsSyncGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("IsSync", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("IsSync", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call IsSync Failed.", err)
 	}
 }
 
 func testVersionGRPC(t *testing.T, rpc *mockGRPCSystem) {
-	var res types.Reply
-	err := rpc.newRpcCtx("Version", &types.ReqNil{}, &res)
+	var res types.VersionInfo
+	err := rpc.newRPCCtx("Version", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call Version Failed.", err)
 	}
+	assert.Equal(t, version.GetVersion(), res.Chain33)
 }
 
 func testDumpPrivkeyGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyString
-	err := rpc.newRpcCtx("DumpPrivkey", &types.ReqString{}, &res)
+	err := rpc.newRPCCtx("DumpPrivkey", &types.ReqString{}, &res)
 	if err != nil {
 		t.Error("Call DumpPrivkey Failed.", err)
 	}
 }
 
+func testDumpPrivkeysFileGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.Reply
+	err := rpc.newRPCCtx("DumpPrivkeysFile", &types.ReqPrivkeysFile{}, &res)
+	if err != nil {
+		t.Error("Call DumpPrivkeysFile Failed.", err)
+	}
+}
+
+func testImportPrivkeysFileGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.Reply
+	err := rpc.newRPCCtx("ImportPrivkeysFile", &types.ReqPrivkeysFile{}, &res)
+	if err != nil {
+		t.Error("Call ImportPrivkeysFile Failed.", err)
+	}
+}
+
 func testGetHexTxByHashGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.HexTx
-	err := rpc.newRpcCtx("GetHexTxByHash", &types.ReqHash{Hash: []byte("fdafdsafds")}, &res)
+	err := rpc.newRPCCtx("GetHexTxByHash", &types.ReqHash{Hash: []byte("fdafdsafds")}, &res)
 	if err != nil {
 		t.Error("Call GetHexTxByHash Failed.", err)
 	}
@@ -855,7 +906,7 @@ func testGetHexTxByHashGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testQueryChainGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("QueryChain", &types.ChainExecutor{}, &res)
+	err := rpc.newRPCCtx("QueryChain", &types.ChainExecutor{}, &res)
 	if err != nil {
 		t.Error("Call QueryChain Failed.", err)
 	}
@@ -863,7 +914,7 @@ func testQueryChainGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetBalanceGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Accounts
-	err := rpc.newRpcCtx("GetBalance", &types.ReqBalance{}, &res)
+	err := rpc.newRPCCtx("GetBalance", &types.ReqBalance{}, &res)
 	if err != nil {
 		t.Error("Call GetBalance Failed.", err)
 	}
@@ -871,7 +922,7 @@ func testGetBalanceGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSaveSeedGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("SaveSeed", &types.SaveSeedByPw{}, &res)
+	err := rpc.newRPCCtx("SaveSeed", &types.SaveSeedByPw{}, &res)
 	if err != nil {
 		t.Error("Call SaveSeed Failed.", err)
 	}
@@ -879,7 +930,7 @@ func testSaveSeedGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetSeedGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplySeed
-	err := rpc.newRpcCtx("GetSeed", &types.GetSeedByPw{}, &res)
+	err := rpc.newRPCCtx("GetSeed", &types.GetSeedByPw{}, &res)
 	if err != nil {
 		t.Error("Call GetSeed Failed.", err)
 	}
@@ -887,7 +938,7 @@ func testGetSeedGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGenSeedGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplySeed
-	err := rpc.newRpcCtx("GenSeed", &types.GenSeedLang{}, &res)
+	err := rpc.newRPCCtx("GenSeed", &types.GenSeedLang{}, &res)
 	if err != nil {
 		t.Error("Call GenSeed Failed.", err)
 	}
@@ -895,7 +946,7 @@ func testGenSeedGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetBlockHashGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyHash
-	err := rpc.newRpcCtx("GetBlockHash", &types.ReqInt{}, &res)
+	err := rpc.newRPCCtx("GetBlockHash", &types.ReqInt{}, &res)
 	if err != nil {
 		t.Error("Call GetBlockHash Failed.", err)
 	}
@@ -903,7 +954,7 @@ func testGetBlockHashGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetAddrOverviewGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.AddrOverview
-	err := rpc.newRpcCtx("GetAddrOverview", &types.ReqAddr{Addr: "13cS5G1BDN2YfGudsxRxr7X25yu6ZdgxMU"}, &res)
+	err := rpc.newRPCCtx("GetAddrOverview", &types.ReqAddr{Addr: "13cS5G1BDN2YfGudsxRxr7X25yu6ZdgxMU"}, &res)
 	if err != nil {
 		t.Error("Call GetAddrOverview Failed.", err)
 	}
@@ -911,7 +962,7 @@ func testGetAddrOverviewGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetBlockOverviewGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.BlockOverview
-	err := rpc.newRpcCtx("GetBlockOverview", &types.ReqHash{}, &res)
+	err := rpc.newRPCCtx("GetBlockOverview", &types.ReqHash{}, &res)
 	if err != nil {
 		t.Error("Call GetBlockOverview Failed.", err)
 	}
@@ -919,7 +970,7 @@ func testGetBlockOverviewGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetWalletStatusGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.WalletStatus
-	err := rpc.newRpcCtx("GetWalletStatus", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("GetWalletStatus", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call GetWalletStatus Failed.", err)
 	}
@@ -927,15 +978,23 @@ func testGetWalletStatusGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetLastMemPoolGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyTxList
-	err := rpc.newRpcCtx("GetLastMemPool", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("GetLastMemPool", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call GetLastMemPool Failed.", err)
 	}
 }
 
+func testGetProperFeeGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.ReplyProperFee
+	err := rpc.newRPCCtx("GetProperFee", &types.ReqProperFee{}, &res)
+	if err != nil {
+		t.Error("Call GetProperFee Failed.", err)
+	}
+}
+
 func testGetPeerInfoGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.PeerList
-	err := rpc.newRpcCtx("GetPeerInfo", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("GetPeerInfo", &types.P2PGetPeerReq{}, &res)
 	if err != nil {
 		t.Error("Call GetPeerInfo Failed.", err)
 	}
@@ -943,7 +1002,7 @@ func testGetPeerInfoGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testUnLockGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("UnLock", &types.WalletUnLock{}, &res)
+	err := rpc.newRPCCtx("UnLock", &types.WalletUnLock{}, &res)
 	if err != nil {
 		t.Error("Call UnLock Failed.", err)
 	}
@@ -951,7 +1010,7 @@ func testUnLockGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testLockGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("Lock", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("Lock", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call Lock Failed.", err)
 	}
@@ -959,7 +1018,7 @@ func testLockGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSetPasswdGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("SetPasswd", &types.ReqWalletSetPasswd{}, &res)
+	err := rpc.newRPCCtx("SetPasswd", &types.ReqWalletSetPasswd{}, &res)
 	if err != nil {
 		t.Error("Call SetPasswd Failed.", err)
 	}
@@ -967,7 +1026,7 @@ func testSetPasswdGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testMergeBalanceGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyHashes
-	err := rpc.newRpcCtx("MergeBalance", &types.ReqWalletMergeBalance{}, &res)
+	err := rpc.newRPCCtx("MergeBalance", &types.ReqWalletMergeBalance{}, &res)
 	if err != nil {
 		t.Error("Call MergeBalance Failed.", err)
 	}
@@ -975,7 +1034,7 @@ func testMergeBalanceGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSetLablGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.WalletAccount
-	err := rpc.newRpcCtx("SetLabl", &types.ReqWalletSetLabel{}, &res)
+	err := rpc.newRPCCtx("SetLabl", &types.ReqWalletSetLabel{}, &res)
 	if err != nil {
 		t.Error("Call SetLabl Failed.", err)
 	}
@@ -983,7 +1042,7 @@ func testSetLablGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSetTxFeeGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("SetTxFee", &types.ReqWalletSetFee{}, &res)
+	err := rpc.newRPCCtx("SetTxFee", &types.ReqWalletSetFee{}, &res)
 	if err != nil {
 		t.Error("Call SetTxFee Failed.", err)
 	}
@@ -991,7 +1050,7 @@ func testSetTxFeeGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSendToAddressGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyHash
-	err := rpc.newRpcCtx("SendToAddress", &types.ReqWalletSendToAddress{}, &res)
+	err := rpc.newRPCCtx("SendToAddress", &types.ReqWalletSendToAddress{}, &res)
 	if err != nil {
 		t.Error("Call SendToAddress Failed.", err)
 	}
@@ -999,7 +1058,7 @@ func testSendToAddressGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testImportPrivKeyGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.WalletAccount
-	err := rpc.newRpcCtx("ImportPrivkey", &types.ReqWalletImportPrivkey{}, &res)
+	err := rpc.newRPCCtx("ImportPrivkey", &types.ReqWalletImportPrivkey{}, &res)
 	if err != nil {
 		t.Error("Call ImportPrivKey Failed.", err)
 	}
@@ -1007,7 +1066,7 @@ func testImportPrivKeyGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testWalletTransactionListGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.WalletTxDetails
-	err := rpc.newRpcCtx("WalletTransactionList", &types.ReqWalletTransactionList{}, &res)
+	err := rpc.newRPCCtx("WalletTransactionList", &types.ReqWalletTransactionList{}, &res)
 	if err != nil {
 		t.Error("Call WalletTransactionList Failed.", err)
 	}
@@ -1015,7 +1074,7 @@ func testWalletTransactionListGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testNewAccountGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.WalletAccount
-	err := rpc.newRpcCtx("NewAccount", &types.ReqNewAccount{}, &res)
+	err := rpc.newRPCCtx("NewAccount", &types.ReqNewAccount{}, &res)
 	if err != nil {
 		t.Error("Call NewAccount Failed.", err)
 	}
@@ -1023,7 +1082,7 @@ func testNewAccountGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetAccountsGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.WalletAccounts
-	err := rpc.newRpcCtx("GetAccounts", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("GetAccounts", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call GetAccounts Failed.", err)
 	}
@@ -1031,7 +1090,7 @@ func testGetAccountsGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetMemPoolGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyTxList
-	err := rpc.newRpcCtx("GetMemPool", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("GetMemPool", &types.ReqGetMempool{}, &res)
 	if err != nil {
 		t.Error("Call GetMemPool Failed.", err)
 	}
@@ -1039,7 +1098,7 @@ func testGetMemPoolGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetTransactionByHashesGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.TransactionDetails
-	err := rpc.newRpcCtx("GetTransactionByHashes", &types.ReqHashes{}, &res)
+	err := rpc.newRPCCtx("GetTransactionByHashes", &types.ReqHashes{}, &res)
 	if err != nil {
 		t.Error("Call GetTransactionByHashes Failed.", err)
 	}
@@ -1047,7 +1106,7 @@ func testGetTransactionByHashesGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetTransactionByAddrGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.ReplyTxInfos
-	err := rpc.newRpcCtx("GetTransactionByAddr", &types.ReqAddr{}, &res)
+	err := rpc.newRPCCtx("GetTransactionByAddr", &types.ReqAddr{}, &res)
 	if err != nil {
 		t.Error("Call GetTransactionByAddr Failed.", err)
 	}
@@ -1055,7 +1114,7 @@ func testGetTransactionByAddrGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSendTransactionGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("SendTransaction", &types.Transaction{}, &res)
+	err := rpc.newRPCCtx("SendTransaction", &types.Transaction{}, &res)
 	if err != nil {
 		t.Error("Call SendTransaction Failed.", err)
 	}
@@ -1063,23 +1122,15 @@ func testSendTransactionGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testQueryTransactionGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.TransactionDetail
-	err := rpc.newRpcCtx("QueryTransaction", &types.ReqHash{}, &res)
+	err := rpc.newRPCCtx("QueryTransaction", &types.ReqHash{}, &res)
 	if err != nil {
 		t.Error("Call QueryTransaction Failed.", err)
 	}
 }
 
-func testSendRawTransactionGRPC(t *testing.T, rpc *mockGRPCSystem) {
-	var res types.Reply
-	err := rpc.newRpcCtx("SendRawTransaction", &types.SignedTx{}, &res)
-	if err != nil {
-		t.Error("Call SendRawTransaction Failed.", err)
-	}
-}
-
 func testCreateRawTransactionGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.UnsignTx
-	err := rpc.newRpcCtx("CreateRawTransaction",
+	err := rpc.newRPCCtx("CreateRawTransaction",
 		&types.CreateTx{To: "1EDDghAtgBsamrNEtNmYdQzC1QEhLkr87t",
 			Amount:     10000000,
 			Fee:        1000000,
@@ -1095,7 +1146,7 @@ func testCreateRawTransactionGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetLastHeaderGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Header
-	err := rpc.newRpcCtx("GetLastHeader", &types.ReqNil{}, &res)
+	err := rpc.newRPCCtx("GetLastHeader", &types.ReqNil{}, &res)
 	if err != nil {
 		t.Error("Call GetLastHeader Failed.", err)
 	}
@@ -1103,7 +1154,7 @@ func testGetLastHeaderGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testGetBlocksGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("GetBlocks", &types.ReqBlocks{}, &res)
+	err := rpc.newRPCCtx("GetBlocks", &types.ReqBlocks{}, &res)
 	if err != nil {
 		t.Error("Call GetBlocks Failed.", err)
 	}
@@ -1111,8 +1162,120 @@ func testGetBlocksGRPC(t *testing.T, rpc *mockGRPCSystem) {
 
 func testSendTxGRPC(t *testing.T, rpc *mockGRPCSystem) {
 	var res types.Reply
-	err := rpc.newRpcCtx("SendTransaction", &types.Transaction{}, &res)
+	err := rpc.newRPCCtx("SendTransaction", &types.Transaction{}, &res)
 	if err != nil {
 		t.Error("Call SendTransaction Failed.", err)
 	}
+}
+
+func testGetSequenceByHashGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.Int64
+	err := rpc.newRPCCtx("GetSequenceByHash", &types.ReqHash{}, &res)
+	if err != nil {
+		t.Error("Call GetSequenceByHash Failed.", err)
+	}
+}
+
+func testGetBlockBySeqGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.BlockSeq
+	//just for coverage
+	err := rpc.newRPCCtx("GetBlockBySeq", &types.Int64{Data: 1}, &res)
+	assert.Nil(t, err)
+
+	err = rpc.newRPCCtx("GetBlockBySeq", &types.Int64{Data: 10}, &res)
+	assert.NotNil(t, err)
+
+}
+
+func TestGetBlockBySeq(t *testing.T) {
+	q := client.QueueProtocol{}
+	_, err := q.GetBlockBySeq(nil)
+	assert.NotNil(t, err)
+
+}
+
+func TestGetMainSeq(t *testing.T) {
+	net := queue.New("test-seq-api")
+	defer net.Close()
+
+	chain := &mockBlockChain{}
+	chain.SetQueueClient(net)
+	defer chain.Close()
+
+	api, err := client.New(net.Client(), nil)
+	assert.Nil(t, err)
+
+	seq, err := api.GetMainSequenceByHash(&types.ReqHash{Hash: []byte("exist-hash")})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(9999), seq.Data)
+
+	seq, err = api.GetMainSequenceByHash(&types.ReqHash{Hash: []byte("")})
+	assert.NotNil(t, err)
+
+	seq1, err := api.GetLastBlockMainSequence()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(9999), seq1.Data)
+}
+
+func testGetParaTxByTitleGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.ParaTxDetails
+	var req types.ReqParaTxByTitle
+	req.Start = 0
+	req.End = 0
+	req.Title = "user"
+	err := rpc.newRPCCtx("GetParaTxByTitle", &req, &res)
+	assert.NotNil(t, err)
+
+	req.Title = "user.p.para."
+	err = rpc.newRPCCtx("GetParaTxByTitle", &req, &res)
+	assert.Nil(t, err)
+
+}
+
+func TestGetParaTxByTitle(t *testing.T) {
+	q := client.QueueProtocol{}
+	_, err := q.GetParaTxByTitle(nil)
+	assert.NotNil(t, err)
+
+}
+
+func testLoadParaTxByTitleGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.ReplyHeightByTitle
+	var req types.ReqHeightByTitle
+	req.Count = 1
+	req.Direction = 0
+	req.Title = "user"
+	req.Height = 0
+
+	err := rpc.newRPCCtx("LoadParaTxByTitle", &req, &res)
+	assert.NotNil(t, err)
+
+	req.Title = "user.p.para."
+	err = rpc.newRPCCtx("LoadParaTxByTitle", &req, &res)
+	assert.Nil(t, err)
+}
+
+func TestLoadParaTxByTitle(t *testing.T) {
+	q := client.QueueProtocol{}
+	_, err := q.LoadParaTxByTitle(nil)
+	assert.NotNil(t, err)
+}
+
+func testGetParaTxByHeightGRPC(t *testing.T, rpc *mockGRPCSystem) {
+	var res types.ParaTxDetails
+	var req types.ReqParaTxByHeight
+	req.Items = append(req.Items, 0)
+	req.Title = "user"
+	err := rpc.newRPCCtx("GetParaTxByHeight", &req, &res)
+	assert.NotNil(t, err)
+
+	req.Title = "user.p.para."
+	err = rpc.newRPCCtx("GetParaTxByHeight", &req, &res)
+	assert.Nil(t, err)
+}
+
+func TestGetParaTxByHeight(t *testing.T) {
+	q := client.QueueProtocol{}
+	_, err := q.GetParaTxByHeight(nil)
+	assert.NotNil(t, err)
 }

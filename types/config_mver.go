@@ -22,19 +22,17 @@ type versionList struct {
 }
 
 type mversion struct {
-	title   string
 	data    map[string]interface{}
 	version map[string]*versionList
 }
 
-func newMversion(title, cfgstring string) *mversion {
+func newMversion(cfgstring string) *mversion {
 	cfg := make(map[string]interface{})
 	if _, err := tml.Decode(cfgstring, &cfg); err != nil {
 		panic(err)
 	}
 	flat := FlatConfig(cfg)
 	mver := &mversion{
-		title:   title,
 		data:    make(map[string]interface{}),
 		version: make(map[string]*versionList),
 	}
@@ -64,8 +62,10 @@ func (m *mversion) get(key string) (interface{}, error) {
 	return nil, ErrNotFound
 }
 
-//根据title 计算fork 信息, 保证这个函数调用在title 的fork 初始化完成之后
-func (m *mversion) UpdateFork() {
+// UpdateFork 根据Forks信息, 适配mver下的fork,
+// 该函数调用需要在所有代码中fork以及toml中fork
+// 载入之后以及载入toml中的mver配置之后调用
+func (m *mversion) UpdateFork(f *Forks) {
 	for k := range m.data {
 		//global fork
 		//mver.forkname.name
@@ -75,15 +75,15 @@ func (m *mversion) UpdateFork() {
 			continue
 		}
 		forkname := items[len(items)-2]
-		if !systemFork.HasFork(m.title, forkname) {
+		if !f.HasFork(forkname) {
 			//maybe sub forl
 			//mver.exec.sub.token.forkname
 			forkname = items[len(items)-3] + "." + items[len(items)-2]
-			if !systemFork.HasFork(m.title, forkname) {
+			if !f.HasFork(forkname) {
 				continue
 			}
 		}
-		id := systemFork.GetFork(title, forkname)
+		id := f.GetFork(forkname)
 		items[len(items)-2] = items[len(items)-1]
 		suffix := items[len(items)-1]
 		prefix := strings.Join(items[0:len(items)-2], ".")
@@ -111,8 +111,14 @@ func (v *versionList) addItem(forkid int64, key, forkname string) error {
 	if len(v.forkname) == 0 {
 		v.forkname = make(map[int64]string)
 	}
+	//这里要允许替换: 有时候会有相同的fork高度
 	if _, ok := v.forkname[forkid]; ok {
-		return fmt.Errorf(key + " same fork height is set: old name is '" + v.forkname[forkid] + "' new name is '" + forkname + "'")
+		//以字母顺序替换
+		if strings.Compare(forkname, v.forkname[forkid]) > 0 {
+			tlog.Warn(key + " same fork height is set: old name is '" + v.forkname[forkid] + "' new name is '" + forkname + "'")
+			v.forkname[forkid] = forkname
+		}
+		return nil
 	}
 	v.forkname[forkid] = forkname
 	v.data = append(v.data, forkid)

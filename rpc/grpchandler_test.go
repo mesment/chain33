@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"testing"
 
+	"strings"
+
 	"github.com/33cn/chain33/client/mocks"
+	"github.com/33cn/chain33/common"
 	"github.com/33cn/chain33/types"
 	pb "github.com/33cn/chain33/types"
 	"github.com/golang/protobuf/proto"
@@ -61,8 +64,10 @@ func init() {
 	//addr := "192.168.1.1"
 	//remoteIpWhitelist[addr] = true
 	//grpcFuncWhitelist["*"] = true
-
+	cfg := types.NewChain33Config(types.GetDefaultCfgstring())
+	Init(cfg)
 	qapi = new(mocks.QueueProtocolAPI)
+	qapi.On("GetConfig", mock.Anything).Return(cfg)
 	g.cli.QueueProtocolAPI = qapi
 }
 
@@ -79,19 +84,6 @@ func getOkCtx() context.Context {
 	return ctx
 }
 
-//func getNokCtx() context.Context {
-//	addr := new(Addr)
-//	addr.On("String").Return("192.168.1.0")
-//
-//	ctx := context.Background()
-//	pr := &peer.Peer{
-//		Addr:     addr,
-//		AuthInfo: nil,
-//	}
-//	ctx = peer.NewContext(ctx, pr)
-//	return ctx
-//}
-
 func testSendTransactionOk(t *testing.T) {
 
 	var in *types.Transaction
@@ -103,123 +95,56 @@ func testSendTransactionOk(t *testing.T) {
 	assert.Equal(t, true, reply.IsOk, "reply should be ok")
 }
 
-//func testSendTransactionReject(t *testing.T) {
-//	var in *types.Transaction
-//
-//	_, err := g.SendTransaction(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func TestSendTransaction(t *testing.T) {
 	testSendTransactionOk(t)
-	//testSendTransactionReject(t)
-
 }
 
-//type fuc func(ctx context.Context, in)
-
-//func testReject(t *testing.T, f func( context.Context, interface{}) (*pb.Reply, error))  {
-//func testReject(t *testing.T, f func( context.Context, interface{}) (*pb.Reply, error))  {
-//
-//	_,err := f(getNokCtx(), nil)
-//	assert.EqualError(t,err,"reject","the error should be reject")
-//
-//
-//}
-
-//func testVersionReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.Version(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testVersionOK(t *testing.T) {
-	reply := &types.Reply{IsOk: true, Msg: nil}
+	reply := &types.VersionInfo{Chain33: "6.0.2"}
 	qapi.On("Version").Return(reply, nil)
 	data, err := g.Version(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Equal(t, true, data.IsOk, "reply should be ok")
-
+	assert.Equal(t, "6.0.2", data.Chain33, "reply should be ok")
 }
 
 func TestVersion(t *testing.T) {
-	//testVersionReject(t)
 	testVersionOK(t)
 }
 
-//func (g *Grpc) GetMemPool(ctx context.Context, in *pb.ReqNil) (*pb.ReplyTxList, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	return g.cli.GetMempool()
-//}
-
-//func testGetMemPoolReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.GetMemPool(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testGetMemPoolOK(t *testing.T) {
-	qapi.On("GetMempool").Return(nil, nil)
+	var in *types.ReqGetMempool
+	qapi.On("GetMempool", in).Return(nil, nil)
 	data, err := g.GetMemPool(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func Test_GetMemPool(t *testing.T) {
-	//testGetMemPoolReject(t)
 	testGetMemPoolOK(t)
 }
-
-//func (g *Grpc) GetLastMemPool(ctx context.Context, in *pb.ReqNil) (*pb.ReplyTxList, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	return g.cli.GetLastMempool()
-//}
-
-//func testGetLastMemPoolReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.GetLastMemPool(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetLastMemPoolOK(t *testing.T) {
 	qapi.On("GetLastMempool").Return(nil, nil)
 	data, err := g.GetLastMemPool(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetLastMemPool(t *testing.T) {
-	//testGetLastMemPoolReject(t)
 	testGetLastMemPoolOK(t)
 }
 
-//func (g *Grpc) QueryChain(ctx context.Context, in *pb.Query) (*pb.Reply, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	msg, err := g.cli.Query(in)
-//	if err != nil {
-//		return nil, err
-//	}
-//	var reply pb.Reply
-//	reply.IsOk = true
-//	reply.Msg = pb.Encode(*msg)
-//	return &reply, nil
-//}
+func testGetProperFeeOK(t *testing.T) {
+	var in *types.ReqProperFee
+	qapi.On("GetProperFee", in).Return(&types.ReplyProperFee{ProperFee: 1000000}, nil)
+	data, err := g.GetProperFee(getOkCtx(), in)
+	assert.Nil(t, err, "the error should be nil")
+	assert.Equal(t, int64(1000000), data.ProperFee)
+}
 
-//func testQueryChainReject(t *testing.T) {
-//	_, err := g.QueryChain(getNokCtx(), nil)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
+func TestGetProperFee(t *testing.T) {
+	testGetProperFeeOK(t)
+}
 
 func testQueryChainError(t *testing.T) {
 	var in *pb.ChainExecutor
@@ -245,420 +170,234 @@ func testQueryChainOK(t *testing.T) {
 }
 
 func TestQueryChain(t *testing.T) {
-	//testQueryChainReject(t)
 	testQueryChainError(t)
 	testQueryChainOK(t)
 }
 
-//func testGetPeerInfoReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.GetPeerInfo(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testGetPeerInfoOK(t *testing.T) {
-	qapi.On("PeerInfo").Return(nil, nil)
-	data, err := g.GetPeerInfo(getOkCtx(), nil)
+	qapi.On("PeerInfo", mock.Anything).Return(nil, nil)
+	data, err := g.GetPeerInfo(getOkCtx(), &types.P2PGetPeerReq{})
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetPeerInfo(t *testing.T) {
-	//testGetPeerInfoReject(t)
 	testGetPeerInfoOK(t)
 }
 
-//func (g *Grpc) NetInfo(ctx context.Context, in *pb.ReqNil) (*pb.NodeNetInfo, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	return g.cli.GetNetInfo()
-//}
-
-//func testNetInfoReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.NetInfo(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testNetInfoOK(t *testing.T) {
-	qapi.On("GetNetInfo").Return(nil, nil)
-	data, err := g.NetInfo(getOkCtx(), nil)
+	qapi.On("GetNetInfo", mock.Anything).Return(nil, nil)
+	data, err := g.NetInfo(getOkCtx(), &types.P2PGetNetInfoReq{})
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestNetInfo(t *testing.T) {
-	//testNetInfoReject(t)
 	testNetInfoOK(t)
 }
 
-//func testGetAccountsReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.GetAccounts(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testGetAccountsOK(t *testing.T) {
-	qapi.On("WalletGetAccountList", mock.Anything).Return(nil, nil)
-	data, err := g.GetAccounts(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletGetAccountList", mock.Anything).Return(&types.WalletAccounts{}, nil)
+	_, err := g.GetAccounts(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestGetAccounts(t *testing.T) {
-	//testGetAccountsReject(t)
 	testGetAccountsOK(t)
 }
 
-//func testNewAccountReject(t *testing.T) {
-//	var in *pb.ReqNewAccount
-//
-//	_, err := g.NewAccount(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testNewAccountOK(t *testing.T) {
 	var in *pb.ReqNewAccount
-	qapi.On("NewAccount", in).Return(nil, nil)
-	data, err := g.NewAccount(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "NewAccount", in).Return(&types.WalletAccount{}, nil)
+	_, err := g.NewAccount(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestNewAccount(t *testing.T) {
-	//testNewAccountReject(t)
 	testNewAccountOK(t)
 }
 
-//func testWalletTransactionListReject(t *testing.T) {
-//	var in *pb.ReqWalletTransactionList
-//
-//	_, err := g.WalletTransactionList(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testWalletTransactionListOK(t *testing.T) {
 	var in *pb.ReqWalletTransactionList
-	qapi.On("WalletTransactionList", in).Return(nil, nil)
-	data, err := g.WalletTransactionList(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletTransactionList", in).Return(&pb.WalletTxDetails{}, nil)
+	_, err := g.WalletTransactionList(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestWalletTransactionList(t *testing.T) {
-	//testWalletTransactionListReject(t)
 	testWalletTransactionListOK(t)
 }
 
-//func testImportPrivKeyReject(t *testing.T) {
-//	var in *pb.ReqWalletImportPrivKey
-//
-//	_, err := g.ImportPrivKey(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testImportPrivKeyOK(t *testing.T) {
 	var in *pb.ReqWalletImportPrivkey
-	qapi.On("WalletImportprivkey", in).Return(nil, nil)
-	data, err := g.ImportPrivkey(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletImportPrivkey", in).Return(&pb.WalletAccount{}, nil)
+	_, err := g.ImportPrivkey(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestImportPrivKey(t *testing.T) {
-	//testImportPrivKeyReject(t)
 	testImportPrivKeyOK(t)
 }
 
-//func testSendToAddressReject(t *testing.T) {
-//	var in *pb.ReqWalletSendToAddress
-//
-//	_, err := g.SendToAddress(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testSendToAddressOK(t *testing.T) {
 	var in *pb.ReqWalletSendToAddress
-	qapi.On("WalletSendToAddress", in).Return(nil, nil)
-	data, err := g.SendToAddress(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletSendToAddress", in).Return(&pb.ReplyHash{}, nil)
+	_, err := g.SendToAddress(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestSendToAddress(t *testing.T) {
-	//testSendToAddressReject(t)
 	testSendToAddressOK(t)
 }
 
-//func testSetTxFeeReject(t *testing.T) {
-//	var in *pb.ReqWalletSetFee
-//
-//	_, err := g.SetTxFee(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testSetTxFeeOK(t *testing.T) {
 	var in *pb.ReqWalletSetFee
-	qapi.On("WalletSetFee", in).Return(nil, nil)
-	data, err := g.SetTxFee(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletSetFee", in).Return(&pb.Reply{}, nil)
+	_, err := g.SetTxFee(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestSetTxFee(t *testing.T) {
-	//testSetTxFeeReject(t)
 	testSetTxFeeOK(t)
 }
 
-//func testSetLablReject(t *testing.T) {
-//	var in *pb.ReqWalletSetLabel
-//
-//	_, err := g.SetLabl(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testSetLablOK(t *testing.T) {
 	var in *pb.ReqWalletSetLabel
-	qapi.On("WalletSetLabel", in).Return(nil, nil)
-	data, err := g.SetLabl(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletSetLabel", in).Return(&pb.WalletAccount{}, nil)
+	_, err := g.SetLabl(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestSetLabl(t *testing.T) {
-	//testSetLablReject(t)
 	testSetLablOK(t)
 }
 
-//func testMergeBalanceReject(t *testing.T) {
-//	var in *pb.ReqWalletMergeBalance
-//
-//	_, err := g.MergeBalance(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testMergeBalanceOK(t *testing.T) {
 	var in *pb.ReqWalletMergeBalance
-	qapi.On("WalletMergeBalance", in).Return(nil, nil)
-	data, err := g.MergeBalance(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletMergeBalance", in).Return(&pb.ReplyHashes{}, nil)
+	_, err := g.MergeBalance(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestMergeBalance(t *testing.T) {
-	//testMergeBalanceReject(t)
 	testMergeBalanceOK(t)
 }
 
-//func testSetPasswdReject(t *testing.T) {
-//	var in *pb.ReqWalletSetPasswd
-//
-//	_, err := g.SetPasswd(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testSetPasswdOK(t *testing.T) {
 	var in *pb.ReqWalletSetPasswd
-	qapi.On("WalletSetPasswd", in).Return(nil, nil)
-	data, err := g.SetPasswd(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletSetPasswd", in).Return(&pb.Reply{}, nil)
+	_, err := g.SetPasswd(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestSetPasswd(t *testing.T) {
-	//testSetPasswdReject(t)
 	testSetPasswdOK(t)
 }
 
-//func testLockReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.Lock(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testLockOK(t *testing.T) {
-
-	qapi.On("WalletLock").Return(nil, nil)
-	data, err := g.Lock(getOkCtx(), nil)
+	var in *pb.ReqNil
+	qapi.On("ExecWalletFunc", "wallet", "WalletLock", in).Return(&pb.Reply{}, nil)
+	_, err := g.Lock(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestLock(t *testing.T) {
-	//testLockReject(t)
 	testLockOK(t)
 }
 
-//func testUnLockReject(t *testing.T) {
-//	var in *pb.WalletUnLock
-//
-//	_, err := g.UnLock(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testUnLockOK(t *testing.T) {
 	var in *pb.WalletUnLock
-	qapi.On("WalletUnLock", in).Return(nil, nil)
-	data, err := g.UnLock(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "WalletUnLock", in).Return(&pb.Reply{}, nil)
+	_, err := g.UnLock(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestUnLock(t *testing.T) {
-	//testUnLockReject(t)
 	testUnLockOK(t)
 }
 
-//func testGenSeedReject(t *testing.T) {
-//	var in *pb.GenSeedLang
-//
-//	_, err := g.GenSeed(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testGenSeedOK(t *testing.T) {
 	var in *pb.GenSeedLang
-	qapi.On("GenSeed", in).Return(nil, nil)
-	data, err := g.GenSeed(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "GenSeed", in).Return(&pb.ReplySeed{}, nil)
+	_, err := g.GenSeed(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestGenSeed(t *testing.T) {
-	//testGenSeedReject(t)
 	testGenSeedOK(t)
 }
 
-//func testGetSeedReject(t *testing.T) {
-//	var in *pb.GetSeedByPw
-//
-//	_, err := g.GetSeed(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testGetSeedOK(t *testing.T) {
 	var in *pb.GetSeedByPw
-	qapi.On("GetSeed", in).Return(nil, nil)
-	data, err := g.GetSeed(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "GetSeed", in).Return(&pb.ReplySeed{}, nil)
+	_, err := g.GetSeed(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestGetSeed(t *testing.T) {
-	//testGetSeedReject(t)
 	testGetSeedOK(t)
 }
 
-//func testSaveSeedReject(t *testing.T) {
-//	var in *pb.SaveSeedByPw
-//
-//	_, err := g.SaveSeed(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testSaveSeedOK(t *testing.T) {
 	var in *pb.SaveSeedByPw
-	qapi.On("SaveSeed", in).Return(nil, nil)
-	data, err := g.SaveSeed(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "SaveSeed", in).Return(&pb.Reply{}, nil)
+	_, err := g.SaveSeed(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestSaveSeed(t *testing.T) {
-	//testSaveSeedReject(t)
 	testSaveSeedOK(t)
 }
 
-//func testGetWalletStatusReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.GetWalletStatus(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testGetWalletStatusOK(t *testing.T) {
-	qapi.On("GetWalletStatus").Return(nil, nil)
-	data, err := g.GetWalletStatus(getOkCtx(), nil)
+	var in *pb.ReqNil
+	qapi.On("ExecWalletFunc", "wallet", "GetWalletStatus", in).Return(&pb.WalletStatus{}, nil)
+	_, err := g.GetWalletStatus(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestGetWalletStatus(t *testing.T) {
-	//testGetWalletStatusReject(t)
 	testGetWalletStatusOK(t)
 }
 
-//func testSetAutoMiningReject(t *testing.T) {
-//	var in *pb.MinerFlag
-//
-//	_, err := g.SetAutoMining(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
-//func testDumpPrivkeyReject(t *testing.T) {
-//	var in *pb.ReqStr
-//
-//	_, err := g.DumpPrivkey(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
 func testDumpPrivkeyOK(t *testing.T) {
 	var in *pb.ReqString
-	qapi.On("DumpPrivkey", in).Return(nil, nil)
-	data, err := g.DumpPrivkey(getOkCtx(), nil)
+	qapi.On("ExecWalletFunc", "wallet", "DumpPrivkey", in).Return(&pb.ReplyString{}, nil)
+	_, err := g.DumpPrivkey(getOkCtx(), nil)
 	assert.Nil(t, err, "the error should be nil")
-	assert.Nil(t, data)
-
 }
 
 func TestDumpPrivkey(t *testing.T) {
-	//testDumpPrivkeyReject(t)
 	testDumpPrivkeyOK(t)
 }
 
-//func testCloseTicketsReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.CloseTickets(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
+func testDumpPrivkeysFileOK(t *testing.T) {
+	var in *pb.ReqPrivkeysFile
+	qapi.On("ExecWalletFunc", "wallet", "DumpPrivkeysFile", in).Return(&pb.Reply{}, nil)
+	_, err := g.DumpPrivkeysFile(getOkCtx(), nil)
+	assert.Nil(t, err, "the error should be nil")
+}
 
-//func testGetBlocksReject(t *testing.T) {
-//	var in *pb.ReqBlocks
-//
-//	_, err := g.GetBlocks(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
+func TestDumpPrivkeysFile(t *testing.T) {
+	testDumpPrivkeysFileOK(t)
+}
+
+func testImportPrivkeysFileOK(t *testing.T) {
+	var in *pb.ReqPrivkeysFile
+	qapi.On("ExecWalletFunc", "wallet", "ImportPrivkeysFile", in).Return(&pb.Reply{}, nil)
+	_, err := g.ImportPrivkeysFile(getOkCtx(), nil)
+	assert.Nil(t, err, "the error should be nil")
+}
+
+func TestImportPrivkeysFile(t *testing.T) {
+	testImportPrivkeysFileOK(t)
+}
 
 func testGetBlocksError(t *testing.T) {
 	var in = pb.ReqBlocks{IsDetail: true}
-
 	qapi.On("GetBlocks", &in).Return(nil, fmt.Errorf("error")).Once()
 	_, err := g.GetBlocks(getOkCtx(), &in)
 	assert.EqualError(t, err, "error", "the error should be error")
-
 }
 
 func testGetBlocksOK(t *testing.T) {
@@ -682,31 +421,9 @@ func testGetBlocksOK(t *testing.T) {
 }
 
 func TestGetBlocks(t *testing.T) {
-	//testGetBlocksReject(t)
 	testGetBlocksError(t)
 	testGetBlocksOK(t)
 }
-
-//func (g *Grpc) GetHexTxByHash(ctx context.Context, in *pb.ReqHash) (*pb.HexTx, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	reply, err := g.cli.QueryTx(in)
-//	if err != nil {
-//		return nil, err
-//	}
-//	tx := reply.GetTx()
-//	if tx == nil {
-//		return &pb.HexTx{}, nil
-//	}
-//	return &pb.HexTx{Tx: hex.EncodeToString(pb.Encode(reply.GetTx()))}, nil
-//}
-//func testGetHexTxByHashReject(t *testing.T) {
-//	var in *pb.ReqHash
-//
-//	_, err := g.GetHexTxByHash(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetHexTxByHashError(t *testing.T) {
 	var in *pb.ReqHash
@@ -722,7 +439,7 @@ func testGetHexTxByHashOK(t *testing.T) {
 	var td = &types.TransactionDetail{Tx: tx}
 	var tdNil = &types.TransactionDetail{Tx: nil}
 
-	encodetx := hex.EncodeToString(pb.Encode(tx))
+	encodetx := common.ToHex(pb.Encode(tx))
 
 	qapi.On("QueryTx", in).Return(tdNil, nil).Once()
 	data, err := g.GetHexTxByHash(getOkCtx(), in)
@@ -733,21 +450,12 @@ func testGetHexTxByHashOK(t *testing.T) {
 	data, err = g.GetHexTxByHash(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Equal(t, encodetx, data.Tx)
-
 }
 
 func TestGetHexTxByHash(t *testing.T) {
-	//testGetHexTxByHashReject(t)
 	testGetHexTxByHashError(t)
 	testGetHexTxByHashOK(t)
 }
-
-//func testGetTransactionByAddrReject(t *testing.T) {
-//	var in *pb.ReqAddr
-//
-//	_, err := g.GetTransactionByAddr(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetTransactionByAddrOK(t *testing.T) {
 	var in *pb.ReqAddr
@@ -755,20 +463,11 @@ func testGetTransactionByAddrOK(t *testing.T) {
 	data, err := g.GetTransactionByAddr(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetTransactionByAddr(t *testing.T) {
-	//testGetTransactionByAddrReject(t)
 	testGetTransactionByAddrOK(t)
 }
-
-//func testGetTransactionByHashesReject(t *testing.T) {
-//	var in *pb.ReqHashes
-//
-//	_, err := g.GetTransactionByHashes(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetTransactionByHashesOK(t *testing.T) {
 	var in *pb.ReqHashes
@@ -776,20 +475,11 @@ func testGetTransactionByHashesOK(t *testing.T) {
 	data, err := g.GetTransactionByHashes(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetTransactionByHashes(t *testing.T) {
-	//testGetTransactionByHashesReject(t)
 	testGetTransactionByHashesOK(t)
 }
-
-//func testGetHeadersReject(t *testing.T) {
-//	var in *pb.ReqBlocks
-//
-//	_, err := g.GetHeaders(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetHeadersOK(t *testing.T) {
 	var in *pb.ReqBlocks
@@ -797,20 +487,11 @@ func testGetHeadersOK(t *testing.T) {
 	data, err := g.GetHeaders(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetHeaders(t *testing.T) {
-	//testGetHeadersReject(t)
 	testGetHeadersOK(t)
 }
-
-//func testGetBlockOverviewReject(t *testing.T) {
-//	var in *pb.ReqHash
-//
-//	_, err := g.GetBlockOverview(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetBlockOverviewOK(t *testing.T) {
 	var in *pb.ReqHash
@@ -818,55 +499,11 @@ func testGetBlockOverviewOK(t *testing.T) {
 	data, err := g.GetBlockOverview(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetBlockOverview(t *testing.T) {
-	//testGetBlockOverviewReject(t)
 	testGetBlockOverviewOK(t)
 }
-
-//func (g *Grpc) GetAddrOverview(ctx context.Context, in *pb.ReqAddr) (*pb.AddrOverview, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	return g.cli.GetAddrOverview(in)
-//}
-
-//func testGetAddrOverviewReject(t *testing.T) {
-//	var in *pb.ReqAddr
-//
-//	_, err := g.GetAddrOverview(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
-
-//client implement self GetAddrOverview instead of api interface
-//func testGetAddrOverviewOK(t *testing.T) {
-//	var in *pb.ReqAddr
-//	qapi.On("GetAddrOverview", in).Return(nil, nil)
-//	data, err := g.GetAddrOverview(getOkCtx(), in)
-//	assert.Nil(t, err, "the error should be nil")
-//	assert.Nil(t, data)
-//
-//}
-
-//func TestGetAddrOverview(t *testing.T) {
-//	//testGetAddrOverviewReject(t)
-//	testGetAddrOverviewOK(t)
-//}
-
-//func (g *Grpc) GetBlockHash(ctx context.Context, in *pb.ReqInt) (*pb.ReplyHash, error) {
-//	if !g.checkWhitlist(ctx) {
-//		return nil, fmt.Errorf("reject")
-//	}
-//	return g.cli.GetBlockHash(in)
-//}
-//func testGetBlockHashReject(t *testing.T) {
-//	var in *pb.ReqInt
-//
-//	_, err := g.GetBlockHash(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetBlockHashOK(t *testing.T) {
 	var in *pb.ReqInt
@@ -874,20 +511,11 @@ func testGetBlockHashOK(t *testing.T) {
 	data, err := g.GetBlockHash(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetBlockHash(t *testing.T) {
-	//testGetBlockHashReject(t)
 	testGetBlockHashOK(t)
 }
-
-//func testIsSyncReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.IsSync(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testIsSyncOK(t *testing.T) {
 	var in *pb.ReqNil
@@ -895,20 +523,11 @@ func testIsSyncOK(t *testing.T) {
 	data, err := g.IsSync(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestIsSync(t *testing.T) {
-	//testIsSyncReject(t)
 	testIsSyncOK(t)
 }
-
-//func testIsNtpClockSyncReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.IsNtpClockSync(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testIsNtpClockSyncOK(t *testing.T) {
 	var in *pb.ReqNil
@@ -916,20 +535,11 @@ func testIsNtpClockSyncOK(t *testing.T) {
 	data, err := g.IsNtpClockSync(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestIsNtpClockSync(t *testing.T) {
-	//testIsNtpClockSyncReject(t)
 	testIsNtpClockSyncOK(t)
 }
-
-//func testGetLastHeaderReject(t *testing.T) {
-//	var in *pb.ReqNil
-//
-//	_, err := g.GetLastHeader(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the error should be reject")
-//}
 
 func testGetLastHeaderOK(t *testing.T) {
 	var in *pb.ReqNil
@@ -937,112 +547,166 @@ func testGetLastHeaderOK(t *testing.T) {
 	data, err := g.GetLastHeader(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestGetLastHeader(t *testing.T) {
-	//testGetLastHeaderReject(t)
 	testGetLastHeaderOK(t)
 }
 
-//func testCreateRawTransactionReject(t *testing.T) {
-//	var in *pb.CreateTx
-//
-//	_, err := g.CreateRawTransaction(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the erros should be reject")
-//}
-
-//func testCreateRawTransactionError(t *testing.T)  {
-//	var in *pb.CreateTx
-//
-//	qapi.On("CreateRawTransaction", in).Return(nil, fmt.Errorf("rejj"))
-//	_,err := g.CreateRawTransaction(getOkCtx(), in)
-//	assert.EqualError(t,err,"error","return error")
-//}
-
-//func testCreateRawTransactionOk(t *testing.T)  {
-//	var in *pb.CreateTx
-//	reply := []byte("reply")
-//
-//
-//	qapi.On("CreateRawTransaction", in).Return(reply, nil)
-//	data,_ := g.CreateRawTransaction(getOkCtx(), in)
-//	assert.Equal(t,reply,data.Data,"return correct reply data")
-//}
-//
-//func Test_CreateRawTransaction(t *testing.T) {
-//	//testCreateRawTransactionReject(t)
-//	testCreateRawTransactionError(t)
-//	testCreateRawTransactionOk(t)
-//}
-
-//func testSendRawTransactionReject(t *testing.T) {
-//	var in *pb.SignedTx
-//
-//	_, err := g.SendRawTransaction(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the erros should be reject")
-//}
-
-//func TestSendRawTransaction(t *testing.T) {
-//	testSendRawTransactionReject(t)
-//}
-
-//func testQueryTransactionReject(t *testing.T) {
-//	var in *pb.ReqHash
-//
-//	_, err := g.QueryTransaction(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the erros should be reject")
-//}
 func testQueryTransactionOK(t *testing.T) {
 	var in *pb.ReqHash
 	qapi.On("QueryTx", in).Return(nil, nil)
 	data, err := g.QueryTransaction(getOkCtx(), in)
 	assert.Nil(t, err, "the error should be nil")
 	assert.Nil(t, data)
-
 }
 
 func TestQueryTransaction(t *testing.T) {
-	//testQueryTransactionReject(t)
 	testQueryTransactionOK(t)
 }
 
-//func testGetBalanceReject(t *testing.T) {
-//	var in *pb.ReqBalance
-//
-//	_, err := g.GetBalance(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the erros should be reject")
-//}
+func TestReWriteRawTx(t *testing.T) {
+	txHex1 := "0a05636f696e73122c18010a281080c2d72f222131477444795771577233553637656a7663776d333867396e7a6e7a434b58434b7120a08d0630a696c0b3f78dd9ec083a2131477444795771577233553637656a7663776d333867396e7a6e7a434b58434b71"
+	in := &types.ReWriteRawTx{
+		Tx:     txHex1,
+		Fee:    29977777777,
+		Expire: "130s",
+		To:     "aabbccdd",
+		Index:  0,
+	}
 
-//func TestGetBalance(t *testing.T) {
-//	testGetBalanceReject(t)
-//}
+	data, err := g.ReWriteRawTx(getOkCtx(), in)
+	assert.Nil(t, err)
+	assert.NotNil(t, data.Data)
+	rtTx := hex.EncodeToString(data.Data)
+	assert.NotEqual(t, txHex1, rtTx)
 
-//func testGetTokenBalanceReject(t *testing.T) {
-//	var in *pb.ReqTokenBalance
-//
-//	_, err := g.GetTokenBalance(getNokCtx(), in)
-//	assert.EqualError(t, err, "reject", "the erros should be reject")
-//}
+	tx := &types.Transaction{}
+	err = types.Decode(data.Data, tx)
+	assert.Nil(t, err)
+	assert.Equal(t, tx.Fee, in.Fee)
+	assert.Equal(t, in.To, tx.To)
+}
 
-//func TestGetTokenBalance(t *testing.T) {
-//	testGetTokenBalanceReject(t)
-//}
+func TestGrpc_CreateNoBalanceTransaction(t *testing.T) {
+	_, err := g.CreateNoBalanceTransaction(getOkCtx(), &pb.NoBalanceTx{})
+	assert.NoError(t, err)
+}
 
-//func testCreateTxGroupOk(t *testing.T) {
-//	txHex1 := "0a05636f696e73122c18010a281080c2d72f222131477444795771577233553637656a7663776d333867396e7a6e7a434b58434b7120a08d0630a696c0b3f78dd9ec083a2131477444795771577233553637656a7663776d333867396e7a6e7a434b58434b71"
-//	txHex2 := "0a05636f696e73122d18010a29108084af5f222231484c53426e7437486e486a7857797a636a6f573863663259745550663337594d6320a08d0630dbc4cbf6fbc4e1d0533a2231484c53426e7437486e486a7857797a636a6f573863663259745550663337594d63"
-//	txs := &types.CreateTransactionGroup{
-//		Txs: []string{txHex1, txHex2},
-//	}
+func TestGrpc_CreateNoBalanceTxs(t *testing.T) {
+	_, err := g.CreateNoBalanceTxs(getOkCtx(), &pb.NoBalanceTxs{TxHexs: []string{"0a05746f6b656e12413804223d0a0443434e5910a09c011a0d74657374207472616e73666572222231333559774e715367694551787577586650626d526d48325935334564673864343820a08d0630969a9fe6c4b9c7ba5d3a2231333559774e715367694551787577586650626d526d483259353345646738643438", "0a05746f6b656e12413804223d0a0443434e5910b0ea011a0d74657374207472616e73666572222231333559774e715367694551787577586650626d526d48325935334564673864343820a08d0630bca0a2dbc0f182e06f3a2231333559774e715367694551787577586650626d526d483259353345646738643438"}})
+	assert.NoError(t, err)
+}
 
-//	reply := []byte("reply")
+func TestGrpc_CreateRawTransaction(t *testing.T) {
+	_, err := g.CreateRawTransaction(getOkCtx(), &pb.CreateTx{})
+	assert.NoError(t, err)
+}
 
-//	qapi.On("CreateRawTxGroup", txs).Return(reply, nil)
-//	data, _ := g.CreateRawTxGroup(getOkCtx(), txs)
-//	assert.Equal(t, reply, data.Data, "return correct reply data")
-//}
+func TestGrpc_CreateTransaction(t *testing.T) {
+	_, err := g.CreateTransaction(getOkCtx(), &pb.CreateTxIn{Execer: []byte("coins")})
+	assert.Equal(t, err, types.ErrActionNotSupport)
+}
 
-//func Test_CreateTxGroup(t *testing.T) {
-//	testCreateTxGroupOk(t)
-//}
+func TestGrpc_CreateRawTxGroup(t *testing.T) {
+	_, err := g.CreateRawTxGroup(getOkCtx(), &pb.CreateTransactionGroup{})
+	assert.Equal(t, types.ErrTxGroupCountLessThanTwo, err)
+}
+
+func TestGrpc_GetAddrOverview(t *testing.T) {
+	_, err := g.GetAddrOverview(getOkCtx(), &types.ReqAddr{})
+	assert.Equal(t, err, types.ErrInvalidAddress)
+}
+
+func TestGrpc_GetBalance(t *testing.T) {
+	qapi.On("StoreGet", mock.Anything).Return(nil, types.ErrInvalidParam)
+	_, err := g.GetBalance(getOkCtx(), &types.ReqBalance{})
+	assert.Equal(t, err, types.ErrInvalidParam)
+}
+
+func TestGrpc_GetAllExecBalance(t *testing.T) {
+	_, err := g.GetAllExecBalance(getOkCtx(), &pb.ReqAllExecBalance{})
+	assert.Equal(t, err, types.ErrInvalidAddress)
+}
+
+func TestGrpc_QueryConsensus(t *testing.T) {
+	qapi.On("QueryConsensus", mock.Anything).Return(&types.ReqString{Data: "test"}, nil)
+	_, err := g.QueryConsensus(getOkCtx(), &pb.ChainExecutor{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_ExecWallet(t *testing.T) {
+	qapi.On("ExecWallet", mock.Anything).Return(&types.ReqString{Data: "test"}, nil)
+	_, err := g.ExecWallet(getOkCtx(), &pb.ChainExecutor{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_GetLastBlockSequence(t *testing.T) {
+	qapi.On("GetLastBlockSequence", mock.Anything).Return(nil, nil)
+	_, err := g.GetLastBlockSequence(getOkCtx(), &types.ReqNil{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_GetBlockByHashes(t *testing.T) {
+	qapi.On("GetBlockByHashes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+	_, err := g.GetBlockByHashes(getOkCtx(), &types.ReqHashes{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_GetSequenceByHash(t *testing.T) {
+	qapi.On("GetSequenceByHash", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+	_, err := g.GetSequenceByHash(getOkCtx(), &pb.ReqHash{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_SignRawTx(t *testing.T) {
+	qapi.On("ExecWalletFunc", "wallet", "SignRawTx", mock.Anything).Return(&pb.ReplySignRawTx{}, nil)
+	_, err := g.SignRawTx(getOkCtx(), &types.ReqSignRawTx{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_QueryRandNum(t *testing.T) {
+	qapi.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(&pb.ReplyHash{Hash: []byte("test")}, nil)
+	_, err := g.QueryRandNum(getOkCtx(), &pb.ReqRandHash{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_GetFork(t *testing.T) {
+	types.RegFork("para", func(cfg *types.Chain33Config) {
+		cfg.SetDappFork("para", "fork100", 100)
+	})
+
+	str := types.GetDefaultCfgstring()
+	newstr := strings.Replace(str, "Title=\"local\"", "Title=\"chain33\"", 1)
+	cfg := types.NewChain33Config(newstr)
+	Init(cfg)
+	api := new(mocks.QueueProtocolAPI)
+	api.On("GetConfig", mock.Anything).Return(cfg)
+	grpc := Grpc{}
+	grpc.cli.QueueProtocolAPI = api
+	val, err := grpc.GetFork(getOkCtx(), &pb.ReqKey{Key: []byte("para-fork100")})
+	assert.NoError(t, err)
+	assert.Equal(t, int64(100), val.Data)
+
+	cfg1 := types.NewChain33Config(types.GetDefaultCfgstring())
+	Init(cfg1)
+	api1 := new(mocks.QueueProtocolAPI)
+	api1.On("GetConfig", mock.Anything).Return(cfg1)
+	grpc1 := Grpc{}
+	grpc1.cli.QueueProtocolAPI = api1
+	val, err = grpc1.GetFork(getOkCtx(), &pb.ReqKey{Key: []byte("ForkBlockHash")})
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), val.Data)
+}
+
+func TestGrpc_LoadParaTxByTitle(t *testing.T) {
+	qapi.On("LoadParaTxByTitle", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+	_, err := g.LoadParaTxByTitle(getOkCtx(), &pb.ReqHeightByTitle{})
+	assert.NoError(t, err)
+}
+
+func TestGrpc_GetParaTxByHeight(t *testing.T) {
+	qapi.On("GetParaTxByHeight", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
+	_, err := g.GetParaTxByHeight(getOkCtx(), &pb.ReqParaTxByHeight{})
+	assert.NoError(t, err)
+}

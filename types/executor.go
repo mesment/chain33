@@ -5,6 +5,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/json"
 	"math/rand"
 	"reflect"
@@ -12,17 +13,18 @@ import (
 	"unicode"
 
 	"github.com/33cn/chain33/common/address"
-	proto "github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 )
 
 func init() {
 	rand.Seed(Now().UnixNano())
 }
 
+// LogType 结构体类型
 type LogType interface {
 	Name() string
 	Decode([]byte) (interface{}, error)
-	Json([]byte) ([]byte, error)
+	JSON([]byte) ([]byte, error)
 }
 
 type logInfoType struct {
@@ -42,13 +44,13 @@ func (l *logInfoType) Decode(data []byte) (interface{}, error) {
 	return DecodeLog(l.execer, l.ty, data)
 }
 
-func (l *logInfoType) Json(data []byte) ([]byte, error) {
+func (l *logInfoType) JSON(data []byte) ([]byte, error) {
 	d, err := l.Decode(data)
 	if err != nil {
 		return nil, err
 	}
 	if msg, ok := d.(Message); ok {
-		return PBToJson(msg)
+		return PBToJSON(msg)
 	}
 	jsdata, err := json.Marshal(d)
 	if err != nil {
@@ -59,6 +61,7 @@ func (l *logInfoType) Json(data []byte) ([]byte, error) {
 
 var executorMap = map[string]ExecutorType{}
 
+// RegistorExecutor 注册执行器
 func RegistorExecutor(exec string, util ExecutorType) {
 	//tlog.Debug("rpc", "t", funcName, "t", util)
 	if util.GetChild() == nil {
@@ -71,6 +74,7 @@ func RegistorExecutor(exec string, util ExecutorType) {
 	}
 }
 
+// LoadExecutorType 加载执行器
 func LoadExecutorType(execstr string) ExecutorType {
 	//尽可能的加载执行器
 	//真正的权限控制在区块执行的时候做控制
@@ -81,8 +85,8 @@ func LoadExecutorType(execstr string) ExecutorType {
 	return nil
 }
 
-// 重构完成后删除
-func CallExecNewTx(execName, action string, param interface{}) ([]byte, error) {
+// CallExecNewTx 重构完成后删除
+func CallExecNewTx(c *Chain33Config, execName, action string, param interface{}) ([]byte, error) {
 	exec := LoadExecutorType(execName)
 	if exec == nil {
 		tlog.Error("callExecNewTx", "Error", "exec not found")
@@ -103,45 +107,78 @@ func CallExecNewTx(execName, action string, param interface{}) ([]byte, error) {
 		tlog.Error("callExecNewTx", "Error", err)
 		return nil, err
 	}
-	return FormatTxEncode(execName, tx)
+	return FormatTxEncode(c, execName, tx)
 }
 
-func CallCreateTx(execName, action string, param Message) ([]byte, error) {
+//CallCreateTransaction 创建一个交易
+func CallCreateTransaction(execName, action string, param Message) (*Transaction, error) {
 	exec := LoadExecutorType(execName)
 	if exec == nil {
-		tlog.Error("callExecNewTx", "Error", "exec not found")
+		tlog.Error("CallCreateTx", "Error", "exec not found")
 		return nil, ErrNotSupport
 	}
 	// param is interface{type, var-nil}, check with nil always fail
 	if param == nil {
-		tlog.Error("callExecNewTx", "Error", "param in nil")
+		tlog.Error("CallCreateTx", "Error", "param in nil")
 		return nil, ErrInvalidParam
 	}
-	tx, err := exec.Create(action, param)
+	return exec.Create(action, param)
+}
+
+// CallCreateTx 构造交易信息
+func CallCreateTx(c *Chain33Config, execName, action string, param Message) ([]byte, error) {
+	tx, err := CallCreateTransaction(execName, action, param)
 	if err != nil {
-		tlog.Error("callExecNewTx", "Error", err)
 		return nil, err
 	}
-	return FormatTxEncode(execName, tx)
+	return FormatTxEncode(c, execName, tx)
 }
 
-func CreateFormatTx(execName string, payload []byte) (*Transaction, error) {
+//CallCreateTxJSON create tx by json
+func CallCreateTxJSON(c *Chain33Config, execName, action string, param json.RawMessage) ([]byte, error) {
+	exec := LoadExecutorType(execName)
+	if exec == nil {
+		execer := GetParaExecName([]byte(execName))
+		//找不到执行器，并且是user.xxx 的情况下
+		if bytes.HasPrefix(execer, UserKey) {
+			tx := &Transaction{Payload: param}
+			return FormatTxEncode(c, execName, tx)
+		}
+		tlog.Error("CallCreateTxJSON", "Error", "exec not found")
+		return nil, ErrExecNotFound
+	}
+	// param is interface{type, var-nil}, check with nil always fail
+	if param == nil {
+		tlog.Error("CallCreateTxJSON", "Error", "param in nil")
+		return nil, ErrInvalidParam
+	}
+	tx, err := exec.CreateTx(action, param)
+	if err != nil {
+		tlog.Error("CallCreateTxJSON", "Error", err)
+		return nil, err
+	}
+	return FormatTxEncode(c, execName, tx)
+}
+
+// CreateFormatTx 构造交易信息
+func CreateFormatTx(c *Chain33Config, execName string, payload []byte) (*Transaction, error) {
 	//填写nonce,execer,to, fee 等信息, 后面会增加一个修改transaction的函数，会加上execer fee 等的修改
 	tx := &Transaction{Payload: payload}
-	return FormatTx(execName, tx)
+	return FormatTx(c, execName, tx)
 }
 
-func FormatTx(execName string, tx *Transaction) (*Transaction, error) {
+// FormatTx 格式化tx交易
+func FormatTx(c *Chain33Config, execName string, tx *Transaction) (*Transaction, error) {
 	//填写nonce,execer,to, fee 等信息, 后面会增加一个修改transaction的函数，会加上execer fee 等的修改
 	tx.Nonce = rand.Int63()
 	tx.Execer = []byte(execName)
 	//平行链，所有的to地址都是合约地址
-	if IsPara() || tx.To == "" {
+	if c.IsPara() || tx.To == "" {
 		tx.To = address.ExecAddress(string(tx.Execer))
 	}
 	var err error
 	if tx.Fee == 0 {
-		tx.Fee, err = tx.GetRealFee(GInt("MinFee"))
+		tx.Fee, err = tx.GetRealFee(c.GetMinTxFeeRate())
 		if err != nil {
 			return nil, err
 		}
@@ -149,8 +186,9 @@ func FormatTx(execName string, tx *Transaction) (*Transaction, error) {
 	return tx, nil
 }
 
-func FormatTxEncode(execName string, tx *Transaction) ([]byte, error) {
-	tx, err := FormatTx(execName, tx)
+// FormatTxEncode 对交易信息编码成byte类型
+func FormatTxEncode(c *Chain33Config, execName string, tx *Transaction) ([]byte, error) {
+	tx, err := FormatTx(c, execName, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +196,7 @@ func FormatTxEncode(execName string, tx *Transaction) ([]byte, error) {
 	return txbyte, nil
 }
 
+// LoadLog 加载log类型
 func LoadLog(execer []byte, ty int64) LogType {
 	loginfo := getLogType(execer, ty)
 	if loginfo.Name == "LogReserved" {
@@ -166,7 +205,7 @@ func LoadLog(execer []byte, ty int64) LogType {
 	return newLogType(execer, ty)
 }
 
-//通过反射,解析日志
+// GetLogName 通过反射,解析日志
 func GetLogName(execer []byte, ty int64) string {
 	t := getLogType(execer, ty)
 	return t.Name
@@ -191,6 +230,7 @@ func getLogType(execer []byte, ty int64) *LogInfo {
 	return SystemLog[0]
 }
 
+// DecodeLog 解析log信息
 func DecodeLog(execer []byte, ty int64, data []byte) (interface{}, error) {
 	t := getLogType(execer, ty)
 	if t.Name == "LogErr" || t.Name == "LogReserved" {
@@ -212,6 +252,7 @@ func DecodeLog(execer []byte, ty int64, data []byte) (interface{}, error) {
 	return msg, nil
 }
 
+// ExecutorType  执行器接口
 type ExecutorType interface {
 	//获取交易真正的to addr
 	GetRealToAddr(tx *Transaction) string
@@ -227,7 +268,7 @@ type ExecutorType interface {
 	CreateTx(action string, message json.RawMessage) (*Transaction, error)
 	CreateQuery(funcname string, message json.RawMessage) (Message, error)
 	AssertCreate(createTx *CreateTx) (*Transaction, error)
-	QueryToJson(funcname string, message Message) ([]byte, error)
+	QueryToJSON(funcname string, message Message) ([]byte, error)
 	Amount(tx *Transaction) (int64, error)
 	DecodePayload(tx *Transaction) (Message, error)
 	DecodePayloadValue(tx *Transaction) (string, reflect.Value, error)
@@ -249,12 +290,18 @@ type ExecutorType interface {
 	CreateTransaction(action string, data Message) (*Transaction, error)
 	// collect assets the tx deal with
 	GetAssets(tx *Transaction) ([]*Asset, error)
+
+	// about chain33Config
+	GetConfig() *Chain33Config
+	SetConfig(cfg *Chain33Config)
 }
 
-type ExecTypeGet interface {
+// ExecTypeGet  获取类型值
+type execTypeGet interface {
 	GetTy() int32
 }
 
+// ExecTypeBase  执行类型
 type ExecTypeBase struct {
 	child               ExecutorType
 	childValue          reflect.Value
@@ -264,12 +311,15 @@ type ExecTypeBase struct {
 	rpclist             map[string]reflect.Method
 	queryMap            map[string]reflect.Type
 	forks               *Forks
+	cfg                 *Chain33Config
 }
 
+// GetChild  获取子执行器
 func (base *ExecTypeBase) GetChild() ExecutorType {
 	return base.child
 }
 
+// SetChild  设置子执行器
 func (base *ExecTypeBase) SetChild(child ExecutorType) {
 	base.child = child
 	base.childValue = reflect.ValueOf(child)
@@ -317,18 +367,22 @@ func (base *ExecTypeBase) SetChild(child ExecutorType) {
 	}
 }
 
+// GetForks  获取fork信息
 func (base *ExecTypeBase) GetForks() *Forks {
 	return &Forks{}
 }
 
+// GetCryptoDriver  获取Crypto驱动
 func (base *ExecTypeBase) GetCryptoDriver(ty int) (string, error) {
 	return "", ErrNotSupport
 }
 
+// GetCryptoType  获取Crypto类型
 func (base *ExecTypeBase) GetCryptoType(name string) (int, error) {
 	return 0, ErrNotSupport
 }
 
+// InitFuncList  初始化函数列表
 func (base *ExecTypeBase) InitFuncList(list map[string]reflect.Method) {
 	base.execFuncList = list
 	actionList := base.GetFuncMap()
@@ -339,36 +393,41 @@ func (base *ExecTypeBase) InitFuncList(list map[string]reflect.Method) {
 	_, base.queryMap = BuildQueryType("Query_", base.execFuncList)
 }
 
+// GetRPCFuncMap  获取rpc的接口列表
 func (base *ExecTypeBase) GetRPCFuncMap() map[string]reflect.Method {
 	return base.rpclist
 }
 
+// GetExecFuncMap  获取执行交易的接口列表
 func (base *ExecTypeBase) GetExecFuncMap() map[string]reflect.Method {
 	return base.execFuncList
 }
 
+// GetName  获取name
 func (base *ExecTypeBase) GetName() string {
 	return "typedriverbase"
 }
 
+// IsFork  是否fork高度
 func (base *ExecTypeBase) IsFork(height int64, key string) bool {
 	if base.GetForks() == nil {
 		return false
 	}
-	return base.forks.IsFork(GetTitle(), height, key)
+	return base.forks.IsFork(height, key)
 }
 
+// GetValueTypeMap  获取执行函数
 func (base *ExecTypeBase) GetValueTypeMap() map[string]reflect.Type {
 	return base.actionListValueType
 }
 
-//用户看到的ToAddr
+//GetRealToAddr 用户看到的ToAddr
 func (base *ExecTypeBase) GetRealToAddr(tx *Transaction) string {
-	if !IsPara() {
+	if !base.cfg.IsPara() {
 		return tx.To
 	}
 	//平行链中的处理方式
-	_, v, err := base.DecodePayloadValue(tx)
+	_, v, err := base.child.DecodePayloadValue(tx)
 	if err != nil {
 		return tx.To
 	}
@@ -393,12 +452,28 @@ func getTo(payload interface{}) (string, bool) {
 	return "", false
 }
 
+//IsAssetsTransfer 是否是资产转移相关的交易
+func IsAssetsTransfer(payload interface{}) bool {
+	if _, ok := payload.(*AssetsTransfer); ok {
+		return true
+	}
+	if _, ok := payload.(*AssetsWithdraw); ok {
+		return true
+	}
+	if _, ok := payload.(*AssetsTransferToExec); ok {
+		return true
+	}
+	return false
+}
+
+//Amounter 转账金额
 type Amounter interface {
 	GetAmount() int64
 }
 
+//Amount 获取tx交易中的转账金额
 func (base *ExecTypeBase) Amount(tx *Transaction) (int64, error) {
-	_, v, err := base.DecodePayloadValue(tx)
+	_, v, err := base.child.DecodePayloadValue(tx)
 	if err != nil {
 		return 0, err
 	}
@@ -410,15 +485,17 @@ func (base *ExecTypeBase) Amount(tx *Transaction) (int64, error) {
 	return 0, nil
 }
 
-//用户看到的FromAddr
+//GetViewFromToAddr 用户看到的FromAddr
 func (base *ExecTypeBase) GetViewFromToAddr(tx *Transaction) (string, string) {
 	return tx.From(), tx.To
 }
 
+//GetFuncMap 获取函数列表
 func (base *ExecTypeBase) GetFuncMap() map[string]reflect.Method {
 	return base.actionFunList
 }
 
+//DecodePayload 解析tx交易中的payload
 func (base *ExecTypeBase) DecodePayload(tx *Transaction) (Message, error) {
 	if base.child == nil {
 		return nil, ErrActionNotSupport
@@ -431,13 +508,16 @@ func (base *ExecTypeBase) DecodePayload(tx *Transaction) (Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if IsNilP(payload) {
-		return nil, ErrDecode
-	}
 	return payload, nil
 }
 
+//DecodePayloadValue 解析tx交易中的payload具体Value值
 func (base *ExecTypeBase) DecodePayloadValue(tx *Transaction) (string, reflect.Value, error) {
+	name, value, err := base.decodePayloadValue(tx)
+	return name, value, err
+}
+
+func (base *ExecTypeBase) decodePayloadValue(tx *Transaction) (string, reflect.Value, error) {
 	if base.child == nil {
 		return "", nilValue, ErrActionNotSupport
 	}
@@ -446,10 +526,9 @@ func (base *ExecTypeBase) DecodePayloadValue(tx *Transaction) (string, reflect.V
 		tlog.Error("DecodePayload", "err", err, "exec", string(tx.Execer))
 		return "", nilValue, err
 	}
-	name, ty, val := GetActionValue(action, base.child.GetFuncMap())
-	if IsNil(val) {
-		tlog.Error("GetActionValue is nil")
-		return "", nilValue, ErrActionNotSupport
+	name, ty, val, err := GetActionValue(action, base.child.GetFuncMap())
+	if err != nil {
+		return "", nilValue, err
 	}
 	typemap := base.child.GetTypeMap()
 	//check types is ok
@@ -460,13 +539,14 @@ func (base *ExecTypeBase) DecodePayloadValue(tx *Transaction) (string, reflect.V
 	return name, val, nil
 }
 
+//ActionName 获取交易中payload的action name
 func (base *ExecTypeBase) ActionName(tx *Transaction) string {
 	payload, err := base.child.DecodePayload(tx)
 	if err != nil {
 		return "unknown-err"
 	}
 	tm := base.child.GetTypeMap()
-	if get, ok := payload.(ExecTypeGet); ok {
+	if get, ok := payload.(execTypeGet); ok {
 		ty := get.GetTy()
 		for k, v := range tm {
 			if v == ty {
@@ -489,6 +569,7 @@ func lowcaseFirst(v string) string {
 	return v
 }
 
+//CreateQuery Query接口查询
 func (base *ExecTypeBase) CreateQuery(funcname string, message json.RawMessage) (Message, error) {
 	if _, ok := base.queryMap[funcname]; !ok {
 		return nil, ErrActionNotSupport
@@ -501,7 +582,7 @@ func (base *ExecTypeBase) CreateQuery(funcname string, message json.RawMessage) 
 		if err != nil {
 			return nil, err
 		}
-		err = JsonToPB(data, in)
+		err = JSONToPB(data, in)
 		if err != nil {
 			return nil, err
 		}
@@ -510,11 +591,12 @@ func (base *ExecTypeBase) CreateQuery(funcname string, message json.RawMessage) 
 	return nil, ErrActionNotSupport
 }
 
-func (base *ExecTypeBase) QueryToJson(funcname string, message Message) ([]byte, error) {
+//QueryToJSON 转换成json格式
+func (base *ExecTypeBase) QueryToJSON(funcname string, message Message) ([]byte, error) {
 	if _, ok := base.queryMap[funcname]; !ok {
 		return nil, ErrActionNotSupport
 	}
-	return PBToJson(message)
+	return PBToJSON(message)
 }
 
 func (base *ExecTypeBase) callRPC(method reflect.Method, action string, msg interface{}) (tx *Transaction, err error) {
@@ -552,6 +634,7 @@ func (base *ExecTypeBase) callRPC(method reflect.Method, action string, msg inte
 	return tx, err
 }
 
+//AssertCreate 构造assets资产交易
 func (base *ExecTypeBase) AssertCreate(c *CreateTx) (*Transaction, error) {
 	if c.ExecName != "" && !IsAllowExecName([]byte(c.ExecName), []byte(c.ExecName)) {
 		tlog.Error("CreateTx", "Error", ErrExecNameNotMatch)
@@ -574,6 +657,7 @@ func (base *ExecTypeBase) AssertCreate(c *CreateTx) (*Transaction, error) {
 	return base.child.CreateTransaction("Transfer", v)
 }
 
+//Create 构造tx交易
 func (base *ExecTypeBase) Create(action string, msg Message) (*Transaction, error) {
 	//先判断 FuncList 中有没有符合要求的函数 RPC_{action}
 	if msg == nil {
@@ -602,6 +686,7 @@ func (base *ExecTypeBase) Create(action string, msg Message) (*Transaction, erro
 	return nil, ErrActionNotSupport
 }
 
+//GetAction 获取action
 func (base *ExecTypeBase) GetAction(action string) (Message, error) {
 	typemap := base.child.GetTypeMap()
 	if _, ok := typemap[action]; ok {
@@ -621,7 +706,7 @@ func (base *ExecTypeBase) GetAction(action string) (Message, error) {
 	return nil, ErrActionNotSupport
 }
 
-//重构完成后删除
+//CreateTx 通过json rpc 创建交易
 func (base *ExecTypeBase) CreateTx(action string, msg json.RawMessage) (*Transaction, error) {
 	data, err := base.GetAction(action)
 	if err != nil {
@@ -632,7 +717,7 @@ func (base *ExecTypeBase) CreateTx(action string, msg json.RawMessage) (*Transac
 		tlog.Error(action + " MarshalJSON  error")
 		return nil, err
 	}
-	err = JsonToPB(b, data)
+	err = JSONToPB(b, data)
 	if err != nil {
 		tlog.Error(action + " jsontopb  error")
 		return nil, err
@@ -640,6 +725,7 @@ func (base *ExecTypeBase) CreateTx(action string, msg json.RawMessage) (*Transac
 	return base.CreateTransaction(action, data)
 }
 
+//CreateTransaction 构造Transaction
 func (base *ExecTypeBase) CreateTransaction(action string, data Message) (tx *Transaction, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -679,13 +765,17 @@ func (base *ExecTypeBase) CreateTransaction(action string, data Message) (tx *Tr
 	tymap := base.child.GetTypeMap()
 	if tyid, ok := tymap[action]; ok {
 		field.Set(reflect.ValueOf(tyid))
-		return &Transaction{Payload: Encode(value)}, nil
+		tx := &Transaction{
+			Payload: Encode(value),
+		}
+		return tx, nil
 	}
 	return nil, ErrActionNotSupport
 }
 
+// GetAssets 获取资产信息
 func (base *ExecTypeBase) GetAssets(tx *Transaction) ([]*Asset, error) {
-	_, v, err := base.DecodePayloadValue(tx)
+	_, v, err := base.child.DecodePayloadValue(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -706,4 +796,12 @@ func (base *ExecTypeBase) GetAssets(tx *Transaction) ([]*Asset, error) {
 	}
 	asset.Amount = amount
 	return []*Asset{asset}, nil
+}
+
+func (base *ExecTypeBase) GetConfig() *Chain33Config {
+	return base.cfg
+}
+
+func (base *ExecTypeBase) SetConfig(cfg *Chain33Config) {
+	base.cfg = cfg
 }

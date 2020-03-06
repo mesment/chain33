@@ -11,7 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/33cn/chain33/p2p/utils"
+
 	"github.com/33cn/chain33/types"
+)
+
+var (
+	peerAddrFilter = utils.NewFilter(PeerAddrCacheNum)
 )
 
 func (n *Node) destroyPeer(peer *Peer) {
@@ -26,9 +32,13 @@ func (n *Node) destroyPeer(peer *Peer) {
 func (n *Node) monitorErrPeer() {
 	for {
 		peer := <-n.nodeInfo.monitorChan
+		if peer == nil {
+			log.Info("monitorChan close")
+			return
+		}
 		if !peer.version.IsSupport() {
 			//如果版本不支持,直接删除节点
-			log.Debug("VersoinMonitor", "NotSupport,addr", peer.Addr())
+			log.Info("VersoinMonitor", "NotSupport,addr", peer.Addr())
 			n.destroyPeer(peer)
 			//加入黑名单12小时
 			n.nodeInfo.blacklist.Add(peer.Addr(), int64(3600*12))
@@ -87,7 +97,7 @@ func (n *Node) getAddrFromGithub() {
 	}
 }
 
-//从在线节点获取地址列表
+// getAddrFromOnline gets the address list from the online node
 func (n *Node) getAddrFromOnline() {
 	ticker := time.NewTicker(GetAddrFromOnlineInterval)
 	defer ticker.Stop()
@@ -121,6 +131,19 @@ func (n *Node) getAddrFromOnline() {
 					n.pubsub.FIFOPub(addr, "addr")
 				}
 
+			}
+
+			if rangeCount < maxOutBoundNum {
+				//从innerSeeds 读取连接
+				n.innerSeeds.Range(func(k, v interface{}) bool {
+					rangeCount++
+					if rangeCount < maxOutBoundNum {
+						n.pubsub.FIFOPub(k.(string), "addr")
+						return true
+					}
+					return false
+
+				})
 			}
 
 			continue
@@ -162,25 +185,31 @@ func (n *Node) getAddrFromOnline() {
 							if _, ok := seedsMap[addr]; ok {
 								continue
 							}
-							//随机删除连接的一个种子
-							for _, seed := range seedArr {
-								if n.Has(seed) {
-									n.remove(seed)
-									n.nodeInfo.addrBook.RemoveAddr(seed)
-									break
-								}
-							}
 
+							//随机删除连接的一个种子
+
+							n.innerSeeds.Range(func(k, v interface{}) bool {
+								if n.Has(k.(string)) {
+									//不能包含在cfgseed中
+									if _, ok := n.cfgSeeds.Load(k.(string)); ok {
+										return true
+									}
+									n.remove(k.(string))
+									n.nodeInfo.addrBook.RemoveAddr(k.(string))
+									return false
+								}
+								return true
+							})
 						}
 					}
 					time.Sleep(MonitorPeerInfoInterval)
 					continue
 				}
 
-				if !n.nodeInfo.blacklist.Has(addr) || !Filter.QueryRecvData(addr) {
+				if !n.nodeInfo.blacklist.Has(addr) || !peerAddrFilter.Contains(addr) {
 					if ticktimes < 10 {
 						//如果连接了其他节点，优先不连接种子节点
-						if _, ok := seedsMap[addr]; !ok {
+						if _, ok := n.innerSeeds.Load(addr); !ok {
 							//先把seed 排除在外
 							n.pubsub.FIFOPub(addr, "addr")
 
@@ -197,7 +226,6 @@ func (n *Node) getAddrFromOnline() {
 	}
 }
 
-//从addrBook 中获取地址
 func (n *Node) getAddrFromAddrBook() {
 	ticker := time.NewTicker(GetAddrFromAddrBookInterval)
 	defer ticker.Stop()
@@ -242,6 +270,10 @@ func (n *Node) nodeReBalance() {
 	defer ticker.Stop()
 
 	for {
+		if n.isClose() {
+			log.Debug("nodeReBalance", "loop", "done")
+			return
+		}
 
 		<-ticker.C
 		log.Info("nodeReBalance", "cacheSize", n.CacheBoundsSize())
@@ -264,8 +296,8 @@ func (n *Node) nodeReBalance() {
 
 		//筛选缓存备选节点负载最大和最小的节点
 		cachePeers := n.GetCacheBounds()
-		var MixCacheInBounds int32 = 1000
-		var MixCacheInBoundPeer *Peer
+		var MinCacheInBounds int32 = 1000
+		var MinCacheInBoundPeer *Peer
 		var MaxCacheInBounds int32
 		var MaxCacheInBoundPeer *Peer
 		for _, peer := range cachePeers {
@@ -276,9 +308,9 @@ func (n *Node) nodeReBalance() {
 				continue
 			}
 			//选出最小负载
-			if int32(inbounds) < MixCacheInBounds {
-				MixCacheInBounds = int32(inbounds)
-				MixCacheInBoundPeer = peer
+			if int32(inbounds) < MinCacheInBounds {
+				MinCacheInBounds = int32(inbounds)
+				MinCacheInBoundPeer = peer
 			}
 
 			//选出负载最大
@@ -288,7 +320,7 @@ func (n *Node) nodeReBalance() {
 			}
 		}
 
-		if MixCacheInBoundPeer == nil || MaxCacheInBoundPeer == nil {
+		if MinCacheInBoundPeer == nil || MaxCacheInBoundPeer == nil {
 			continue
 		}
 
@@ -298,7 +330,7 @@ func (n *Node) nodeReBalance() {
 			MaxCacheInBoundPeer.Close()
 		}
 		//如果最大的负载量比缓存中负载最小的小，则删除缓存中所有的节点
-		if MaxInBounds < MixCacheInBounds {
+		if MaxInBounds < MinCacheInBounds {
 			cachePeers := n.GetCacheBounds()
 			for _, peer := range cachePeers {
 				n.RemoveCachePeer(peer.Addr())
@@ -307,16 +339,16 @@ func (n *Node) nodeReBalance() {
 
 			continue
 		}
-		log.Info("nodeReBalance", "MaxInBounds", MaxInBounds, "MixCacheInBounds", MixCacheInBounds)
-		if MaxInBounds-MixCacheInBounds < 50 {
+		log.Info("nodeReBalance", "MaxInBounds", MaxInBounds, "MixCacheInBounds", MinCacheInBounds)
+		if MaxInBounds-MinCacheInBounds < 50 {
 			continue
 		}
 
-		if MixCacheInBoundPeer != nil {
-			info, err := MixCacheInBoundPeer.GetPeerInfo(VERSION)
+		if MinCacheInBoundPeer != nil {
+			info, err := MinCacheInBoundPeer.GetPeerInfo()
 			if err != nil {
-				n.RemoveCachePeer(MixCacheInBoundPeer.Addr())
-				MixCacheInBoundPeer.Close()
+				n.RemoveCachePeer(MinCacheInBoundPeer.Addr())
+				MinCacheInBoundPeer.Close()
 				continue
 			}
 			localBlockHeight, err := p2pcli.GetBlockHeight(n.nodeInfo)
@@ -325,10 +357,12 @@ func (n *Node) nodeReBalance() {
 			}
 			peerBlockHeight := info.GetHeader().GetHeight()
 			if localBlockHeight-peerBlockHeight < 2048 {
-				log.Info("noReBalance", "Repalce node new node", MixCacheInBoundPeer.Addr(), "old node", MaxCacheInBoundPeer.Addr())
-				n.addPeer(MixCacheInBoundPeer)
+				log.Info("noReBalance", "Repalce node new node", MinCacheInBoundPeer.Addr(), "old node", MaxInBoundPeer.Addr())
+				n.addPeer(MinCacheInBoundPeer)
+				n.nodeInfo.addrBook.AddAddress(MinCacheInBoundPeer.peerAddr, nil)
+
 				n.remove(MaxInBoundPeer.Addr())
-				n.RemoveCachePeer(MixCacheInBoundPeer.Addr())
+				n.RemoveCachePeer(MinCacheInBoundPeer.Addr())
 			}
 		}
 	}
@@ -342,7 +376,10 @@ func (n *Node) monitorPeers() {
 	defer ticker.Stop()
 	_, selfName := n.nodeInfo.addrBook.GetPrivPubKey()
 	for {
-
+		if n.isClose() {
+			log.Debug("monitorPeers", "loop", "done")
+			return
+		}
 		<-ticker.C
 		localBlockHeight, err := p2pcli.GetBlockHeight(n.nodeInfo)
 		if err != nil {
@@ -350,11 +387,12 @@ func (n *Node) monitorPeers() {
 		}
 
 		peers, infos := n.GetActivePeers()
-		for paddr, pinfo := range infos {
+		for name, pinfo := range infos {
 			peerheight := pinfo.GetHeader().GetHeight()
-			if pinfo.GetName() == selfName && !pinfo.GetSelf() { //发现连接到自己，立即删除
+			paddr := pinfo.GetAddr()
+			if name == selfName && !pinfo.GetSelf() { //发现连接到自己，立即删除
 				//删除节点数过低的节点
-				n.remove(paddr)
+				n.remove(pinfo.GetAddr())
 				n.nodeInfo.addrBook.RemoveAddr(paddr)
 				n.nodeInfo.blacklist.Add(paddr, 0)
 			}
@@ -374,11 +412,13 @@ func (n *Node) monitorPeers() {
 				if n.Size() <= stableBoundNum {
 					continue
 				}
+				//如果是配置节点，则不删除
+				if _, ok := n.cfgSeeds.Load(paddr); ok {
+					continue
+				}
 				//删除节点数过低的节点
 				n.remove(paddr)
 				n.nodeInfo.addrBook.RemoveAddr(paddr)
-				//短暂加入黑名单5分钟
-				//n.nodeInfo.blacklist.Add(paddr, int64(60*5))
 			}
 
 		}
@@ -404,7 +444,7 @@ func (n *Node) monitorPeerInfo() {
 	}()
 }
 
-//并发连接节点地址
+// monitorDialPeers connect the node address concurrently
 func (n *Node) monitorDialPeers() {
 	var dialCount int
 	addrChan := n.pubsub.Sub("addr")
@@ -415,7 +455,7 @@ func (n *Node) monitorDialPeers() {
 			log.Info("monitorDialPeers", "loop", "done")
 			return
 		}
-		if Filter.QueryRecvData(addr.(string)) {
+		if peerAddrFilter.Contains(addr.(string)) {
 			//先查询有没有注册进去，避免同时重复连接相同的地址
 			continue
 		}
@@ -429,7 +469,7 @@ func (n *Node) monitorDialPeers() {
 			continue
 		}
 
-		//不对已经连接上的地址或者黑名单地址发起连接
+		//不对已经连接上的地址或者黑名单地址发起连接 TODO:连接足够时,对于连入的地址也不再去重复连接(客户端服务端只维护一条连接, 后续优化)
 		if n.Has(netAddr.String()) || n.nodeInfo.blacklist.Has(netAddr.String()) || n.HasCacheBound(netAddr.String()) {
 			log.Debug("DialPeers", "find hash", netAddr.String())
 			continue
@@ -442,7 +482,7 @@ func (n *Node) monitorDialPeers() {
 			continue
 		}
 
-		log.Info("DialPeers", "peer", netAddr.String())
+		log.Debug("DialPeers", "peer", netAddr.String())
 		//并发连接节点，增加连接效率
 		if dialCount >= maxOutBoundNum*2 {
 			n.pubsub.FIFOPub(addr, "addr")
@@ -452,15 +492,15 @@ func (n *Node) monitorDialPeers() {
 		}
 		dialCount++
 		//把待连接的节点增加到过滤容器中
-		Filter.RegRecvData(addr.(string))
-		log.Info("monitorDialPeer", "dialCount", dialCount)
+		peerAddrFilter.Add(addr.(string), types.Now().Unix())
+		log.Debug("monitorDialPeer", "dialCount", dialCount)
 		go func(netAddr *NetAddress) {
-			defer Filter.RemoveRecvData(netAddr.String())
+			defer peerAddrFilter.Remove(netAddr.String())
 			peer, err := P2pComm.dialPeer(netAddr, n)
 			if err != nil {
 				//连接失败后
 				n.nodeInfo.addrBook.RemoveAddr(netAddr.String())
-				log.Error("monitorDialPeers", "Err", err.Error())
+				log.Error("monitorDialPeers", "peerAddr", netAddr.str, "err", err.Error())
 				if err == types.ErrVersion { //版本不支持，加入黑名单12小时
 					peer.version.SetSupport(false)
 					P2pComm.CollectPeerStat(err, peer)
@@ -470,7 +510,9 @@ func (n *Node) monitorDialPeers() {
 				if peer != nil {
 					peer.Close()
 				}
-				n.nodeInfo.blacklist.Add(netAddr.String(), int64(60*10))
+				if _, ok := n.cfgSeeds.Load(netAddr.String()); !ok {
+					n.nodeInfo.blacklist.Add(netAddr.String(), int64(60*10))
+				}
 				return
 			}
 			//查询远程节点的负载
@@ -531,5 +573,51 @@ func (n *Node) monitorBlackList() {
 }
 
 func (n *Node) monitorFilter() {
-	Filter.ManageRecvFilter()
+	tickTime := time.Second * 30
+	peerAddrFilter.ManageRecvFilter(tickTime)
+}
+
+//独立goroutine 监控配置的
+
+func (n *Node) monitorCfgSeeds() {
+
+	ticker := time.NewTicker(CheckCfgSeedsInterVal)
+	defer ticker.Stop()
+
+	for {
+		if n.isClose() {
+			log.Info("monitorCfgSeeds", "loop", "done")
+			return
+		}
+
+		<-ticker.C
+		n.cfgSeeds.Range(func(k, v interface{}) bool {
+
+			if !n.Has(k.(string)) {
+				//尝试连接此节点
+				if n.needMore() { //如果需要更多的节点
+					n.pubsub.FIFOPub(k.(string), "addr")
+				} else {
+					//腾笼换鸟
+					peers, _ := n.GetActivePeers()
+					//选出当前连接的节点中，负载最大的节点
+					var MaxInBounds int32
+					MaxInBoundPeer := &Peer{}
+					for _, peer := range peers {
+						if peer.GetInBouns() > MaxInBounds {
+							MaxInBounds = peer.GetInBouns()
+							MaxInBoundPeer = peer
+						}
+					}
+
+					n.remove(MaxInBoundPeer.Addr())
+					n.pubsub.FIFOPub(k.(string), "addr")
+
+				}
+
+			}
+			return true
+		})
+	}
+
 }

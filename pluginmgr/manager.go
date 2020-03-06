@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/33cn/chain33/rpc/types"
+	typ "github.com/33cn/chain33/types"
 	wcom "github.com/33cn/chain33/wallet/common"
 	"github.com/spf13/cobra"
 )
@@ -16,14 +17,24 @@ var pluginItems = make(map[string]Plugin)
 
 var once = &sync.Once{}
 
-func InitExec(sub map[string][]byte) {
+// InitExec init exec
+func InitExec(cfg *typ.Chain33Config) {
 	once.Do(func() {
 		for _, item := range pluginItems {
-			item.InitExec(sub)
+			item.InitExec(cfg)
 		}
 	})
 }
 
+//GetExecList 获取插件名字列表
+func GetExecList() (datas []string) {
+	for _, plugin := range pluginItems {
+		datas = append(datas, plugin.GetExecutorName())
+	}
+	return
+}
+
+// InitWallet init wallet plugin
 func InitWallet(wallet wcom.WalletOperate, sub map[string][]byte) {
 	once.Do(func() {
 		for _, item := range pluginItems {
@@ -32,6 +43,7 @@ func InitWallet(wallet wcom.WalletOperate, sub map[string][]byte) {
 	})
 }
 
+// HasExec check is have the name exec
 func HasExec(name string) bool {
 	for _, item := range pluginItems {
 		if item.GetExecutorName() == name {
@@ -41,9 +53,10 @@ func HasExec(name string) bool {
 	return false
 }
 
+// Register Register plugin
 func Register(p Plugin) {
 	if p == nil {
-		panic("plugin param is nil" + p.GetName())
+		panic("plugin param is nil")
 	}
 	packageName := p.GetName()
 	if len(packageName) == 0 {
@@ -55,12 +68,14 @@ func Register(p Plugin) {
 	pluginItems[packageName] = p
 }
 
+// AddCmd add Command for plugin
 func AddCmd(rootCmd *cobra.Command) {
 	for _, item := range pluginItems {
 		item.AddCmd(rootCmd)
 	}
 }
 
+// AddRPC add Rpc
 func AddRPC(s types.RPCServer) {
 	for _, item := range pluginItems {
 		item.AddRPC(s)

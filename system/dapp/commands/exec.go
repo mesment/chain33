@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// ExecCmd exec command
 func ExecCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "exec",
@@ -32,7 +33,7 @@ func ExecCmd() *cobra.Command {
 	return cmd
 }
 
-// get address of an execer
+// GetExecAddrCmd  get address of an execer
 func GetExecAddrCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "addr",
@@ -59,7 +60,7 @@ func getAddrByExec(cmd *cobra.Command, args []string) {
 	fmt.Println(result)
 }
 
-// create user data
+// UserDataCmd  create user data
 func UserDataCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "userdata",
@@ -78,6 +79,8 @@ func addUserDataFlags(cmd *cobra.Command) {
 }
 
 func addUserData(cmd *cobra.Command, args []string) {
+	title, _ := cmd.Flags().GetString("title")
+	cfg := types.GetCliSysParam(title)
 	execer, err := cmd.Flags().GetString("exec")
 	if err != nil {
 		fmt.Println(err)
@@ -106,7 +109,7 @@ func addUserData(cmd *cobra.Command, args []string) {
 		Payload: []byte(data),
 		To:      addrResult,
 	}
-	tx.Fee, err = tx.GetRealFee(types.GInt("MinFee"))
+	tx.Fee, err = tx.GetRealFee(cfg.GetMinTxFeeRate())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return

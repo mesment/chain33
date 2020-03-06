@@ -71,8 +71,7 @@ func TestMergeLevel2Error(t *testing.T) {
 }
 
 func TestMergeToml(t *testing.T) {
-	S("cfg.bityuan", bityuancfg)
-	newcfg := mergeCfg(readFile("../cmd/chain33/bityuan.toml"))
+	newcfg := MergeCfg(ReadFile("../cmd/chain33/bityuan.toml"), bityuancfg)
 	cfg1, err := initCfgString(newcfg)
 	assert.Nil(t, err)
 	cfg2, err := initCfgString(readFile("testdata/bityuan.toml"))
@@ -93,13 +92,10 @@ singleMode=false
 
 [p2p]
 enable=true
-serverStart=true
-msgCacheSize=10240
 driver="leveldb"
 
 [mempool]
 poolCacheSize=102400
-minTxFee=100000
 
 [consensus]
 name="ticket"
@@ -184,8 +180,7 @@ driver="leveldb"
 signType="secp256k1"
 
 [exec]
-isFree=false
-minExecFee=100000
+
 
 [exec.sub.token]
 #配置一个空值，防止配置文件被覆盖
@@ -203,6 +198,7 @@ superManager=[
 #但是我们可以替换
 [fork.system]
 ForkChainParamV1= 0
+ForkStateDBSet=-1
 ForkCheckTxDup=0
 ForkBlockHash= 1
 ForkMinerTime= 0
@@ -213,14 +209,22 @@ ForkResetTx0= 200000
 ForkWithdraw= 200000
 ForkExecRollback= 450000
 ForkCheckBlockTime=1200000
+ForkMultiSignAddress=1298600
 ForkTxHeight= -1
 ForkTxGroupPara= -1
 ForkChainParamV2= -1
-
+ForkBlockCheck=1725000
+ForkLocalDBAccess=1
+ForkBase58AddressCheck=1800000
+ForkTicketFundAddrV1=-1
+ForkRootHash=1
 [fork.sub.coins]
 Enable=0
 
 [fork.sub.manage]
 Enable=0
 ForkManageExec=100000
+
+[fork.sub.store-kvmvccmavl]
+ForkKvmvccmavl=1
 `

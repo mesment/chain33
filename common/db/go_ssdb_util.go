@@ -15,6 +15,7 @@ import (
 	"github.com/33cn/chain33/types"
 )
 
+//const
 const (
 	ENDN = '\n'
 	ENDR = '\r'
@@ -32,17 +33,20 @@ const (
 	PooledSize = 3
 )
 
+//SDBClient ...
 type SDBClient struct {
 	sock     *net.TCPConn
 	timeZero time.Time
 	mu       sync.Mutex
 }
 
+//SDBPool SDB池
 type SDBPool struct {
 	clients []*SDBClient
 	round   *RoundInt
 }
 
+//RoundInt ...
 type RoundInt struct {
 	round int
 	index int
@@ -62,10 +66,12 @@ func (pool *SDBPool) get() *SDBClient {
 }
 func (pool *SDBPool) close() {
 	for _, v := range pool.clients {
-		v.Close()
+		err := v.Close()
+		dlog.Error("ssdb close ", "error", err)
 	}
 }
 
+//NewSDBPool new
 func NewSDBPool(nodes []*SsdbNode) (pool *SDBPool, err error) {
 	dbpool := &SDBPool{}
 	for i := 0; i < PooledSize; i++ {
@@ -82,6 +88,7 @@ func NewSDBPool(nodes []*SsdbNode) (pool *SDBPool, err error) {
 	return dbpool, nil
 }
 
+//Connect 连接
 func Connect(ip string, port int) (*SDBClient, error) {
 	addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
@@ -99,8 +106,7 @@ func Connect(ip string, port int) (*SDBClient, error) {
 	return &c, nil
 }
 
-//获取指定 key 的值内容
-//
+//Get 获取指定 key 的值内容
 //  key 键值
 //  返回 一个 Value,可以方便的向其它类型转换
 //  返回 一个可能的错误，操作成功返回 nil
@@ -111,7 +117,7 @@ func (c *SDBClient) Get(key string) (*Value, error) {
 	}
 
 	if len(resp) == 0 {
-		return nil, newError("ssdb respone error")
+		return nil, newError("ssdb response error")
 	}
 
 	if len(resp) == 2 && resp[0] == OK {
@@ -121,8 +127,7 @@ func (c *SDBClient) Get(key string) (*Value, error) {
 	return nil, makeError(resp, key)
 }
 
-//设置指定 key 的值内容
-//
+//Set 设置指定 key 的值内容
 //  key 键值
 //  val 存贮的 value 值,val只支持基本的类型，如果要支持复杂的类型，需要开启连接池的 Encoding 选项
 //  ttl 可选，设置的过期时间，单位为秒
@@ -139,8 +144,7 @@ func (c *SDBClient) Set(key string, val []byte) (err error) {
 	return makeError(resp, key)
 }
 
-//删除指定 key
-//
+//Del 删除指定 key
 //  key 要删除的 key
 //  返回 err，执行的错误，操作成功返回 nil
 func (c *SDBClient) Del(key string) error {
@@ -156,8 +160,7 @@ func (c *SDBClient) Del(key string) error {
 	return makeError(resp, key)
 }
 
-//批量设置一批 key-value.
-//
+//MultiSet 批量设置一批 key-value.
 //  包含 key-value 的字典
 //  返回 err，可能的错误，操作成功返回 nil
 func (c *SDBClient) MultiSet(kvs map[string][]byte) (err error) {
@@ -180,8 +183,7 @@ func (c *SDBClient) MultiSet(kvs map[string][]byte) (err error) {
 	return makeError(resp, kvs)
 }
 
-//批量删除一批 key 和其对应的值内容.
-//
+//MultiDel 批量删除一批 key 和其对应的值内容.
 //  key，要删除的 key，可以为多个
 //  返回 err，可能的错误，操作成功返回 nil
 func (c *SDBClient) MultiDel(key ...string) (err error) {
@@ -203,8 +205,7 @@ func (c *SDBClient) MultiDel(key ...string) (err error) {
 	return makeError(resp, key)
 }
 
-//批量删除一批 key 和其对应的值内容.
-//
+//MultiGet 批量删除一批 key 和其对应的值内容.
 //  key，要删除的 key，可以为多个
 //  返回 err，可能的错误，操作成功返回 nil
 func (c *SDBClient) MultiGet(key ...string) (vals []*Value, err error) {
@@ -231,8 +232,7 @@ func (c *SDBClient) MultiGet(key ...string) (vals []*Value, err error) {
 	return nil, makeError(resp, key)
 }
 
-//列出处于区间 (key_start, key_end] 的 key 列表.("", ""] 表示整个区间.
-//
+//Keys 列出处于区间 (key_start, key_end] 的 key 列表.("", ""] 表示整个区间.
 //  keyStart int 返回的起始 key(不包含), 空字符串表示 -inf.
 //  keyEnd int 返回的结束 key(包含), 空字符串表示 +inf.
 //  limit int 最多返回这么多个元素.
@@ -243,7 +243,7 @@ func (c *SDBClient) Keys(keyStart, keyEnd string, limit int64) ([]string, error)
 	resp, err := c.Do("keys", keyStart, keyEnd, limit)
 
 	if err != nil {
-		return nil, newErrorf(err, "Keys %s error", keyStart, keyEnd, limit)
+		return nil, newErrorf(err, "Keys [%s,%s] %d error", keyStart, keyEnd, limit)
 	}
 	if len(resp) > 0 && resp[0] == OK {
 		return resp[1:], nil
@@ -251,8 +251,7 @@ func (c *SDBClient) Keys(keyStart, keyEnd string, limit int64) ([]string, error)
 	return nil, makeError(resp, keyStart, keyEnd, limit)
 }
 
-//列出处于区间 (key_start, key_end] 的 key 列表.("", ""] 表示整个区间.反向选择
-//
+//Rkeys 列出处于区间 (key_start, key_end] 的 key 列表.("", ""] 表示整个区间.反向选择
 //  keyStart int 返回的起始 key(不包含), 空字符串表示 -inf.
 //  keyEnd int 返回的结束 key(包含), 空字符串表示 +inf.
 //  limit int 最多返回这么多个元素.
@@ -263,13 +262,15 @@ func (c *SDBClient) Rkeys(keyStart, keyEnd string, limit int64) ([]string, error
 	resp, err := c.Do("rkeys", keyStart, keyEnd, limit)
 
 	if err != nil {
-		return nil, newErrorf(err, "Rkeys %s error", keyStart, keyEnd, limit)
+		return nil, newErrorf(err, "Rkeys [%s,%s] %d error", keyStart, keyEnd, limit)
 	}
 	if len(resp) > 0 && resp[0] == OK {
 		return resp[1:], nil
 	}
 	return nil, makeError(resp, keyStart, keyEnd, limit)
 }
+
+//Do do
 func (c *SDBClient) Do(args ...interface{}) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -286,43 +287,80 @@ func (c *SDBClient) Do(args ...interface{}) ([]string, error) {
 
 func (c *SDBClient) send(args []interface{}) error {
 	var packetBuf bytes.Buffer
+	var err error
 	for _, arg := range args {
 		switch arg := arg.(type) {
 		case string:
-			packetBuf.Write(strconv.AppendInt(nil, int64(len(arg)), 10))
-			packetBuf.WriteByte(ENDN)
-			packetBuf.WriteString(arg)
+			if _, err = packetBuf.Write(strconv.AppendInt(nil, int64(len(arg)), 10)); err != nil {
+				return err
+			}
+			if err = packetBuf.WriteByte(ENDN); err != nil {
+				return err
+			}
+			if _, err = packetBuf.WriteString(arg); err != nil {
+				return err
+			}
 		case []string:
 			for _, a := range arg {
-				packetBuf.Write(strconv.AppendInt(nil, int64(len(a)), 10))
-				packetBuf.WriteByte(ENDN)
-				packetBuf.WriteString(a)
-				packetBuf.WriteByte(ENDN)
+				if _, err = packetBuf.Write(strconv.AppendInt(nil, int64(len(a)), 10)); err != nil {
+					return err
+				}
+				if err = packetBuf.WriteByte(ENDN); err != nil {
+					return err
+				}
+				if _, err = packetBuf.WriteString(a); err != nil {
+					return err
+				}
+				if err = packetBuf.WriteByte(ENDN); err != nil {
+					return err
+				}
 			}
 			continue
 		case []byte:
-			packetBuf.Write(strconv.AppendInt(nil, int64(len(arg)), 10))
-			packetBuf.WriteByte(ENDN)
-			packetBuf.Write(arg)
+			if _, err = packetBuf.Write(strconv.AppendInt(nil, int64(len(arg)), 10)); err != nil {
+				return err
+			}
+			if err = packetBuf.WriteByte(ENDN); err != nil {
+				return err
+			}
+			if _, err = packetBuf.Write(arg); err != nil {
+				return err
+			}
 		case int64:
 			bs := strconv.AppendInt(nil, arg, 10)
-			packetBuf.Write(strconv.AppendInt(nil, int64(len(bs)), 10))
-			packetBuf.WriteByte(ENDN)
-			packetBuf.Write(bs)
+			if _, err = packetBuf.Write(strconv.AppendInt(nil, int64(len(bs)), 10)); err != nil {
+				return err
+			}
+			if err = packetBuf.WriteByte(ENDN); err != nil {
+				return err
+			}
+			if _, err = packetBuf.Write(bs); err != nil {
+				return err
+			}
 		case nil:
-			packetBuf.WriteByte(0)
-			packetBuf.WriteByte(ENDN)
-			packetBuf.WriteString("")
+			if err = packetBuf.WriteByte(0); err != nil {
+				return err
+			}
+			if err = packetBuf.WriteByte(ENDN); err != nil {
+				return err
+			}
+			if _, err = packetBuf.WriteString(""); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("bad arguments type")
 		}
-		packetBuf.WriteByte(ENDN)
+		if err = packetBuf.WriteByte(ENDN); err != nil {
+			return err
+		}
 	}
-	packetBuf.WriteByte(ENDN)
-	if err := c.sock.SetWriteDeadline(time.Now().Add(time.Second * WriteTimeOut)); err != nil {
+	if err = packetBuf.WriteByte(ENDN); err != nil {
 		return err
 	}
-	for _, err := packetBuf.WriteTo(c.sock); packetBuf.Len() > 0; {
+	if err = c.sock.SetWriteDeadline(time.Now().Add(time.Second * WriteTimeOut)); err != nil {
+		return err
+	}
+	for _, err = packetBuf.WriteTo(c.sock); packetBuf.Len() > 0; {
 		if err != nil {
 			packetBuf.Reset()
 			return newErrorf(err, "client socket write error")
@@ -336,7 +374,6 @@ func (c *SDBClient) send(args []interface{}) error {
 	return nil
 }
 func (c *SDBClient) recv() (resp []string, err error) {
-	bufSize := 0
 	packetBuf := []byte{}
 	//设置读取数据超时，
 	if err = c.sock.SetReadDeadline(time.Now().Add(time.Second * ReadTimeOut)); err != nil {
@@ -345,7 +382,7 @@ func (c *SDBClient) recv() (resp []string, err error) {
 	//数据包分解，发现长度，找到结尾，循环发现，发现空行，结束
 	readBuf := make([]byte, ReadBufSize)
 	for {
-		bufSize, err = c.sock.Read(readBuf)
+		bufSize, err := c.sock.Read(readBuf)
 		if err != nil {
 			return nil, newErrorf(err, "client socket read error")
 		}
@@ -359,7 +396,7 @@ func (c *SDBClient) recv() (resp []string, err error) {
 			if n == -1 {
 				break
 			} else if n == -2 {
-				return
+				return nil, newErrorf(err, "parse error")
 			} else {
 				resp = append(resp, rsp)
 				packetBuf = packetBuf[n+1:]
@@ -370,7 +407,6 @@ func (c *SDBClient) recv() (resp []string, err error) {
 
 func (c *SDBClient) parse(buf []byte) (resp string, size int) {
 	n := bytes.IndexByte(buf, ENDN)
-	blockSize := -1
 	size = -1
 	if n != -1 {
 		if n == 0 || n == 1 && buf[0] == ENDR { //空行，说明一个数据包结束
@@ -378,7 +414,7 @@ func (c *SDBClient) parse(buf []byte) (resp string, size int) {
 			return
 		}
 		//数据包开始，包长度解析
-		blockSize = ToNum(buf[:n])
+		blockSize := ToNum(buf[:n])
 		bufSize := len(buf)
 
 		if n+blockSize < bufSize {
@@ -402,7 +438,7 @@ func (c *SDBClient) Close() error {
 //生成通过的错误信息，已经确定是有错误
 func makeError(resp []string, errKey ...interface{}) error {
 	if len(resp) < 1 {
-		return newError("ssdb respone error")
+		return newError("ssdb response error")
 	}
 	//正常返回的不存在不报错，如果要捕捉这个问题请使用exists
 	if resp[0] == NotFound {
@@ -410,12 +446,12 @@ func makeError(resp []string, errKey ...interface{}) error {
 	}
 	if len(errKey) > 0 {
 		return newError("access ssdb error, code is %v, parameter is %v", resp, errKey)
-	} else {
-		return newError("access ssdb error, code is %v", resp)
 	}
+	return newError("access ssdb error, code is %v", resp)
+
 }
 
-//扩展值，原始类型为 string
+//Value 扩展值，原始类型为 string
 type Value struct {
 	val []byte
 }
@@ -425,7 +461,7 @@ func (v *Value) String() string {
 	return string(v.val)
 }
 
-//返回 []byte 类型的值
+//Bytes 返回 []byte 类型的值
 func (v *Value) Bytes() []byte {
 	return v.val
 }
@@ -450,6 +486,7 @@ var (
 	minByteSize byte = 48
 )
 
+//ToNum []byte -> int
 func ToNum(bs []byte) int {
 	re := 0
 	for _, v := range bs {
@@ -462,6 +499,7 @@ func ToNum(bs []byte) int {
 }
 
 var (
+	//FormatString 格式化字符串
 	FormatString = "%v\nthe trace error is\n%s"
 )
 

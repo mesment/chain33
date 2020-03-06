@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package commands 管理插件命令
 package commands
 
 import (
@@ -12,11 +13,13 @@ import (
 	"github.com/33cn/chain33/util"
 
 	"github.com/33cn/chain33/rpc/jsonclient"
+	rpctypes "github.com/33cn/chain33/rpc/types"
 	pty "github.com/33cn/chain33/system/dapp/manage/types"
 	"github.com/33cn/chain33/types"
 	"github.com/spf13/cobra"
 )
 
+// ConfigCmd config command
 func ConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
@@ -32,7 +35,7 @@ func ConfigCmd() *cobra.Command {
 	return cmd
 }
 
-// config transaction
+// ConfigTxCmd config transaction
 func ConfigTxCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config_tx",
@@ -44,8 +47,8 @@ func ConfigTxCmd() *cobra.Command {
 }
 
 func addConfigTxFlags(cmd *cobra.Command) {
-	cmd.Flags().StringP("key", "k", "", "key string")
-	cmd.MarkFlagRequired("key")
+	cmd.Flags().StringP("config_key", "c", "", "config key string")
+	cmd.MarkFlagRequired("config_key")
 
 	cmd.Flags().StringP("operation", "o", "", "adding or deletion operation")
 	cmd.MarkFlagRequired("operation")
@@ -56,8 +59,10 @@ func addConfigTxFlags(cmd *cobra.Command) {
 }
 
 func configTx(cmd *cobra.Command, args []string) {
+	title, _ := cmd.Flags().GetString("title")
+	cfg := types.GetCliSysParam(title)
 	paraName, _ := cmd.Flags().GetString("paraName")
-	key, _ := cmd.Flags().GetString("key")
+	key, _ := cmd.Flags().GetString("config_key")
 	op, _ := cmd.Flags().GetString("operation")
 	opAddr, _ := cmd.Flags().GetString("value")
 
@@ -68,7 +73,7 @@ func configTx(cmd *cobra.Command, args []string) {
 	}
 	tx := &types.Transaction{Payload: types.Encode(modify)}
 	var err error
-	tx, err = types.FormatTx(util.GetParaExecName(paraName, "manage"), tx)
+	tx, err = types.FormatTx(cfg, util.GetParaExecName(paraName, "manage"), tx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return
@@ -77,10 +82,10 @@ func configTx(cmd *cobra.Command, args []string) {
 	fmt.Println(hex.EncodeToString(txHex))
 }
 
-// query config
+// QueryConfigCmd  query config
 func QueryConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "query_config",
+		Use:   "query",
 		Short: "Query config item",
 		Run:   queryConfig,
 	}
@@ -100,12 +105,12 @@ func queryConfig(cmd *cobra.Command, args []string) {
 	req := &types.ReqString{
 		Data: key,
 	}
-	var params types.Query4Cli
+	var params rpctypes.Query4Jrpc
 	params.Execer = util.GetParaExecName(paraName, "manage")
 	params.FuncName = "GetConfigItem"
-	params.Payload = req
+	params.Payload = types.MustPBToJSON(req)
 
 	var res types.ReplyConfig
-	ctx := jsonclient.NewRpcCtx(rpcLaddr, "Chain33.Query", params, &res)
+	ctx := jsonclient.NewRPCCtx(rpcLaddr, "Chain33.Query", params, &res)
 	ctx.Run()
 }

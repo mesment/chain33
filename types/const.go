@@ -9,46 +9,60 @@ import (
 )
 
 var slash = []byte("-")
+var sharp = []byte("#")
+
+//Debug 调试开关
 var Debug = false
 
+//LogErr log错误信息
 type LogErr []byte
+
+//LogReserved LogReserved信息
 type LogReserved []byte
 
+//LogInfo loginfo信息
 type LogInfo struct {
 	Ty   reflect.Type
 	Name string
 }
 
+//UserKeyX 用户自定义执行器前缀字符串
 const (
 	UserKeyX = "user."
 	ParaKeyX = "user.p."
 	NoneX    = "none"
 )
 
+//DefaultCoinsSymbol 默认的主币名称
+const (
+	DefaultCoinsSymbol = "bty"
+)
+
+//UserKeyX 用户自定义执行器前缀byte类型
 var (
 	UserKey    = []byte(UserKeyX)
 	ParaKey    = []byte(ParaKeyX)
 	ExecerNone = []byte(NoneX)
 )
 
+//基本全局常量定义
 const (
 	InputPrecision        float64 = 1e4
 	Multiple1E4           int64   = 1e4
 	BTY                           = "BTY"
-	BTYDustThreshold              = Coin
-	ConfirmedHeight               = 12
-	UTXOCacheCount                = 256
-	SignatureSize                 = (4 + 33 + 65)
-	PrivacyMaturityDegree         = 12
 	TxGroupMaxCount               = 20
 	MinerAction                   = "miner"
-)
+	Int1E4                int64   = 10000
+	Float1E4              float64 = 10000.0
+	AirDropMinIndex       uint32  = 100000000         //通过钱包的seed生成一个空投地址，最小index索引
+	AirDropMaxIndex       uint32  = 101000000         //通过钱包的seed生成一个空投地址，最大index索引
+	MaxBlockCountPerTime  int64   = 1000              //从数据库中一次性获取block的最大数 1000个
+	MaxBlockSizePerTime           = 100 * 1024 * 1024 //从数据库中一次性获取block的最大size100M
+	AddBlock              int64   = 1
+	DelBlock              int64   = 2
+	MainChainName                 = "main"
+	MaxHeaderCountPerTime int64   = 10000 //从数据库中一次性获取header的最大数 10000个
 
-var (
-	//addr:1Cbo5u8V5F3ubWBv9L6qu9wWxKuD3qBVpi,这里只是作为测试用，后面需要修改为系统账户
-	ViewPubFee  = "0x0f7b661757fe8471c0b853b09bf526b19537a2f91254494d19874a04119415e8"
-	SpendPubFee = "0x64204db5a521771eeeddee59c25aaae6bebe796d564effb6ba11352418002ee3"
-	ViewPrivFee = "0x0f7b661757fe8471c0b853b09bf526b19537a2f91254494d19874a04119415e8"
 )
 
 //ty = 1 -> secp256k1
@@ -65,19 +79,12 @@ const (
 	SM2       = 3
 )
 
-// 创建隐私交易的类型定义
-const (
-	PrivacyTypePublic2Privacy = iota + 1
-	PrivacyTypePrivacy2Privacy
-	PrivacyTypePrivacy2Public
-)
-
 //log type
 const (
 	TyLogReserved = 0
 	TyLogErr      = 1
 	TyLogFee      = 2
-	//coins
+	//TyLogTransfer coins
 	TyLogTransfer        = 3
 	TyLogGenesis         = 4
 	TyLogDeposit         = 5
@@ -88,8 +95,12 @@ const (
 	TyLogExecActive      = 10
 	TyLogGenesisTransfer = 11
 	TyLogGenesisDeposit  = 12
+	TyLogRollback        = 13
+	TyLogMint            = 14
+	TyLogBurn            = 15
 )
 
+//SystemLog 系统log日志
 var SystemLog = map[int64]*LogInfo{
 	TyLogReserved:        {reflect.TypeOf(LogReserved{}), "LogReserved"},
 	TyLogErr:             {reflect.TypeOf(LogErr{}), "LogErr"},
@@ -103,6 +114,9 @@ var SystemLog = map[int64]*LogInfo{
 	TyLogExecActive:      {reflect.TypeOf(ReceiptExecAccountTransfer{}), "LogExecActive"},
 	TyLogGenesisTransfer: {reflect.TypeOf(ReceiptAccountTransfer{}), "LogGenesisTransfer"},
 	TyLogGenesisDeposit:  {reflect.TypeOf(ReceiptAccountTransfer{}), "LogGenesisDeposit"},
+	TyLogRollback:        {reflect.TypeOf(LocalDBSet{}), "LogRollback"},
+	TyLogMint:            {reflect.TypeOf(ReceiptAccountMint{}), "LogMint"},
+	TyLogBurn:            {reflect.TypeOf(ReceiptAccountBurn{}), "LogBurn"},
 }
 
 //exec type
@@ -112,9 +126,10 @@ const (
 	ExecOk   = 2
 )
 
-func init() {
-	S("TxHeight", false)
-}
+// TODO 后续调试确认放的位置
+//func init() {
+//	S("TxHeight", false)
+//}
 
 //flag:
 
@@ -123,10 +138,10 @@ func init() {
 //提供一种可以快速查重的交易类型，和原来的交易完全兼容
 //并且可以通过开关控制是否开启这样的交易
 
-//标记是一个时间还是一个 TxHeight
+//TxHeightFlag 标记是一个时间还是一个 TxHeight
 var TxHeightFlag int64 = 1 << 62
 
-//eg: current Height is 10000
+//HighAllowPackHeight eg: current Height is 10000
 //TxHeight is  10010
 //=> Height <= TxHeight + HighAllowPackHeight
 //=> Height >= TxHeight - LowAllowPackHeight
@@ -137,7 +152,9 @@ var TxHeightFlag int64 = 1 << 62
 //也就是说，另外一笔相同的交易，只能被打包在这个区间(9910,10210)。
 //那么检查交易重复的时候，我只要检查 9910 - currentHeight 这个区间的交易不要重复就好了
 var HighAllowPackHeight int64 = 90
+
+//LowAllowPackHeight 允许打包的low区块高度
 var LowAllowPackHeight int64 = 30
 
-//默认情况下不开启fork
+//EnableTxGroupParaFork 默认情况下不开启fork
 var EnableTxGroupParaFork = false

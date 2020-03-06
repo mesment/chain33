@@ -11,19 +11,21 @@ import (
 
 // QueueProtocolAPI 消息通道交互API接口定义
 type QueueProtocolAPI interface {
-	Version() (*types.Reply, error)
+	Version() (*types.VersionInfo, error)
 	Close()
-	NewMessage(topic string, msgid int64, data interface{}) queue.Message
-	Notify(topic string, ty int64, data interface{}) (queue.Message, error)
+	NewMessage(topic string, msgid int64, data interface{}) *queue.Message
+	Notify(topic string, ty int64, data interface{}) (*queue.Message, error)
 	// +++++++++++++++ mempool interfaces begin
 	// 同步发送交易信息到指定模块，获取应答消息 types.EventTx
 	SendTx(param *types.Transaction) (*types.Reply, error)
 	// types.EventTxList
 	GetTxList(param *types.TxHashList) (*types.ReplyTxList, error)
 	// types.EventGetMempool
-	GetMempool() (*types.ReplyTxList, error)
+	GetMempool(req *types.ReqGetMempool) (*types.ReplyTxList, error)
 	// types.EventGetLastMempool
 	GetLastMempool() (*types.ReplyTxList, error)
+	// types.EventGetProperFee
+	GetProperFee(req *types.ReqProperFee) (*types.ReplyProperFee, error)
 	// +++++++++++++++ execs interfaces begin
 	// types.EventBlockChainQuery
 	Query(driver, funcname string, param types.Message) (types.Message, error)
@@ -36,52 +38,27 @@ type QueueProtocolAPI interface {
 
 	// +++++++++++++++ p2p interfaces begin
 	// types.EventPeerInfo
-	PeerInfo() (*types.PeerList, error)
+	PeerInfo(param *types.P2PGetPeerReq) (*types.PeerList, error)
 	// types.EventGetNetInfo
-	GetNetInfo() (*types.NodeNetInfo, error)
+	GetNetInfo(param *types.P2PGetNetInfoReq) (*types.NodeNetInfo, error)
 	// --------------- p2p interfaces end
 	// +++++++++++++++ wallet interfaces begin
 	// types.EventLocalGet
 	LocalGet(param *types.LocalDBGet) (*types.LocalReplyValue, error)
+	// types.EventLocalNew
+	LocalNew(param *types.ReqNil) (*types.Int64, error)
+	// types.EventLocalClose
+	LocalClose(param *types.Int64) error
+	// types.EventLocalBeign
+	LocalBegin(param *types.Int64) error
+	// types.EventLocalCommit
+	LocalCommit(param *types.Int64) error
+	// types.EventLocalRollback
+	LocalRollback(param *types.Int64) error
+	// types.EventLocalSet
+	LocalSet(param *types.LocalDBSet) error
 	// types.EventLocalList
 	LocalList(param *types.LocalDBList) (*types.LocalReplyValue, error)
-	// types.EventWalletGetAccountList
-	WalletGetAccountList(req *types.ReqAccountList) (*types.WalletAccounts, error)
-	// types.EventNewAccount
-	NewAccount(param *types.ReqNewAccount) (*types.WalletAccount, error)
-	// types.EventWalletTransactionList
-	WalletTransactionList(param *types.ReqWalletTransactionList) (*types.WalletTxDetails, error)
-	// types.EventWalletImportprivkey
-	WalletImportprivkey(param *types.ReqWalletImportPrivkey) (*types.WalletAccount, error)
-	// types.EventWalletSendToAddress
-	WalletSendToAddress(param *types.ReqWalletSendToAddress) (*types.ReplyHash, error)
-	// types.EventWalletSetFee
-	WalletSetFee(param *types.ReqWalletSetFee) (*types.Reply, error)
-	// types.EventWalletSetLabel
-	WalletSetLabel(param *types.ReqWalletSetLabel) (*types.WalletAccount, error)
-	// types.EventWalletMergeBalance
-	WalletMergeBalance(param *types.ReqWalletMergeBalance) (*types.ReplyHashes, error)
-	// types.EventWalletSetPasswd
-	WalletSetPasswd(param *types.ReqWalletSetPasswd) (*types.Reply, error)
-	// types.EventWalletLock
-	WalletLock() (*types.Reply, error)
-	// types.EventWalletUnLock
-	WalletUnLock(param *types.WalletUnLock) (*types.Reply, error)
-	// types.EventGenSeed
-	GenSeed(param *types.GenSeedLang) (*types.ReplySeed, error)
-	// types.EventSaveSeed
-	SaveSeed(param *types.SaveSeedByPw) (*types.Reply, error)
-	// types.EventGetSeed
-	GetSeed(param *types.GetSeedByPw) (*types.ReplySeed, error)
-	// types.EventGetWalletStatus
-	GetWalletStatus() (*types.WalletStatus, error)
-	// types.EventDumpPrivkey
-	DumpPrivkey(param *types.ReqString) (*types.ReplyString, error)
-	// types.EventSignRawTx
-	SignRawTx(param *types.ReqSignRawTx) (*types.ReplySignRawTx, error)
-	GetFatalFailure() (*types.Int32, error)
-	// types.EventCreateTransaction 由服务器协助创建一个交易
-	WalletCreateTx(param *types.ReqCreateTransaction) (*types.Transaction, error)
 	// types.EventGetBlocks
 	GetBlocks(param *types.ReqBlocks) (*types.BlockDetails, error)
 	// types.EventQueryTx
@@ -111,16 +88,48 @@ type QueueProtocolAPI interface {
 	GetBlockSequences(param *types.ReqBlocks) (*types.BlockSequences, error)
 	//types.EventGetBlockByHashes:
 	GetBlockByHashes(param *types.ReqHashes) (*types.BlockDetails, error)
+	//types.EventGetBlockBySeq:
+	GetBlockBySeq(param *types.Int64) (*types.BlockSeq, error)
+	//types.EventGetSequenceByHash:
+	GetSequenceByHash(param *types.ReqHash) (*types.Int64, error)
+
+	// 在平行链上获得主链Sequence相关的接口
+	//types.EventGetLastBlockSequence:
+	GetLastBlockMainSequence() (*types.Int64, error)
+	//types.EventGetSequenceByHash:
+	GetMainSequenceByHash(param *types.ReqHash) (*types.Int64, error)
 
 	// --------------- blockchain interfaces end
 
 	// +++++++++++++++ store interfaces begin
+	StoreSet(param *types.StoreSetWithSync) (*types.ReplyHash, error)
 	StoreGet(*types.StoreGet) (*types.StoreReplyValue, error)
+	StoreMemSet(param *types.StoreSetWithSync) (*types.ReplyHash, error)
+	StoreCommit(param *types.ReqHash) (*types.ReplyHash, error)
+	StoreRollback(param *types.ReqHash) (*types.ReplyHash, error)
+	StoreDel(param *types.StoreDel) (*types.ReplyHash, error)
 	StoreGetTotalCoins(*types.IterateRangeByStateHash) (*types.ReplyGetTotalCoins, error)
+	StoreList(param *types.StoreList) (*types.StoreListReply, error)
 	// --------------- store interfaces end
 
 	// +++++++++++++++ other interfaces begin
 	// close chain33
 	CloseQueue() (*types.Reply, error)
 	// --------------- other interfaces end
+	// types.EventAddBlockSeqCB
+	AddSeqCallBack(param *types.BlockSeqCB) (*types.ReplyAddSeqCallback, error)
+
+	// types.EventListBlockSeqCB
+	ListSeqCallBack() (*types.BlockSeqCBs, error)
+	// types.EventGetSeqCBLastNum
+	GetSeqCallBackLastNum(param *types.ReqString) (*types.Int64, error)
+	// types.EventGetParaTxByTitle
+	GetParaTxByTitle(param *types.ReqParaTxByTitle) (*types.ParaTxDetails, error)
+	// types.EventGetHeightByTitle
+	LoadParaTxByTitle(param *types.ReqHeightByTitle) (*types.ReplyHeightByTitle, error)
+	// types.EventGetParaTxByTitleAndHeight
+	GetParaTxByHeight(param *types.ReqParaTxByHeight) (*types.ParaTxDetails, error)
+
+	// get chain config
+	GetConfig() *types.Chain33Config
 }

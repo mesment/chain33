@@ -18,7 +18,7 @@ import (
 )
 
 // TODO: SetPostRunCb()
-type JsonRpcCtx struct {
+type JSONRPCCtx struct {
 	Addr   string
 	Method string
 	Params interface{}
@@ -31,8 +31,8 @@ type JsonRpcCtx struct {
 
 type Callback func(res interface{}) (interface{}, error)
 
-func NewJsonRpcCtx(methed string, params, res interface{}) *JsonRpcCtx {
-	return &JsonRpcCtx{
+func NewJSONRPCCtx(methed string, params, res interface{}) *JSONRPCCtx {
+	return &JSONRPCCtx{
 		Addr:   jrpcsite,
 		Method: methed,
 		Params: params,
@@ -40,11 +40,11 @@ func NewJsonRpcCtx(methed string, params, res interface{}) *JsonRpcCtx {
 	}
 }
 
-func (c *JsonRpcCtx) SetResultCb(cb Callback) {
+func (c *JSONRPCCtx) SetResultCb(cb Callback) {
 	c.cb = cb
 }
 
-func (c *JsonRpcCtx) Run() (err error) {
+func (c *JSONRPCCtx) Run() (err error) {
 	if c.jsonClient == nil {
 		c.jsonClient, err = jsonclient.NewJSONClient(c.Addr)
 		if err != nil {
@@ -114,12 +114,6 @@ func (c *GrpcCtx) Run() (err error) {
 			*c.Res.(*types.UnsignTx) = *reply
 		}
 		errRet = err
-	case "SendRawTransaction":
-		reply, err := rpc.SendRawTransaction(context.Background(), c.Params.(*types.SignedTx))
-		if err == nil {
-			*c.Res.(*types.Reply) = *reply
-		}
-		errRet = err
 	case "QueryTransaction":
 		reply, err := rpc.QueryTransaction(context.Background(), c.Params.(*types.ReqHash))
 		if err == nil {
@@ -144,7 +138,7 @@ func (c *GrpcCtx) Run() (err error) {
 		}
 		errRet = err
 	case "GetMemPool":
-		reply, err := rpc.GetMemPool(context.Background(), c.Params.(*types.ReqNil))
+		reply, err := rpc.GetMemPool(context.Background(), c.Params.(*types.ReqGetMempool))
 		if err == nil {
 			*c.Res.(*types.ReplyTxList) = *reply
 		}
@@ -214,7 +208,7 @@ func (c *GrpcCtx) Run() (err error) {
 		}
 		errRet = err
 	case "GetPeerInfo":
-		reply, err := rpc.GetPeerInfo(context.Background(), c.Params.(*types.ReqNil))
+		reply, err := rpc.GetPeerInfo(context.Background(), c.Params.(*types.P2PGetPeerReq))
 		if err == nil {
 			*c.Res.(*types.PeerList) = *reply
 		}
@@ -223,6 +217,12 @@ func (c *GrpcCtx) Run() (err error) {
 		reply, err := rpc.GetLastMemPool(context.Background(), c.Params.(*types.ReqNil))
 		if err == nil {
 			*c.Res.(*types.ReplyTxList) = *reply
+		}
+		errRet = err
+	case "GetProperFee":
+		reply, err := rpc.GetProperFee(context.Background(), c.Params.(*types.ReqProperFee))
+		if err == nil {
+			*c.Res.(*types.ReplyProperFee) = *reply
 		}
 		errRet = err
 	case "GetWalletStatus":
@@ -291,10 +291,22 @@ func (c *GrpcCtx) Run() (err error) {
 			*c.Res.(*types.ReplyString) = *reply
 		}
 		errRet = err
+	case "DumpPrivkeysFile":
+		reply, err := rpc.DumpPrivkeysFile(context.Background(), c.Params.(*types.ReqPrivkeysFile))
+		if err == nil {
+			*c.Res.(*types.Reply) = *reply
+		}
+		errRet = err
+	case "ImportPrivkeysFile":
+		reply, err := rpc.ImportPrivkeysFile(context.Background(), c.Params.(*types.ReqPrivkeysFile))
+		if err == nil {
+			*c.Res.(*types.Reply) = *reply
+		}
+		errRet = err
 	case "Version":
 		reply, err := rpc.Version(context.Background(), c.Params.(*types.ReqNil))
 		if err == nil {
-			*c.Res.(*types.Reply) = *reply
+			*c.Res.(*types.VersionInfo) = *reply
 		}
 		errRet = err
 	case "IsSync":
@@ -310,11 +322,43 @@ func (c *GrpcCtx) Run() (err error) {
 		}
 		errRet = err
 	case "NetInfo":
-		reply, err := rpc.NetInfo(context.Background(), c.Params.(*types.ReqNil))
+		reply, err := rpc.NetInfo(context.Background(), c.Params.(*types.P2PGetNetInfoReq))
 		if err == nil {
 			*c.Res.(*types.NodeNetInfo) = *reply
 		}
 		errRet = err
+	case "GetSequenceByHash":
+		reply, err := rpc.GetSequenceByHash(context.Background(), c.Params.(*types.ReqHash))
+		if err == nil {
+			*c.Res.(*types.Int64) = *reply
+		}
+		errRet = err
+	case "GetBlockBySeq":
+		reply, err := rpc.GetBlockBySeq(context.Background(), c.Params.(*types.Int64))
+		if err == nil {
+			*c.Res.(*types.BlockSeq) = *reply
+		}
+		errRet = err
+	case "GetParaTxByTitle":
+		reply, err := rpc.GetParaTxByTitle(context.Background(), c.Params.(*types.ReqParaTxByTitle))
+		if err == nil {
+			*c.Res.(*types.ParaTxDetails) = *reply
+		}
+		errRet = err
+
+	case "LoadParaTxByTitle":
+		reply, err := rpc.LoadParaTxByTitle(context.Background(), c.Params.(*types.ReqHeightByTitle))
+		if err == nil {
+			*c.Res.(*types.ReplyHeightByTitle) = *reply
+		}
+		errRet = err
+	case "GetParaTxByHeight":
+		reply, err := rpc.GetParaTxByHeight(context.Background(), c.Params.(*types.ReqParaTxByHeight))
+		if err == nil {
+			*c.Res.(*types.ParaTxDetails) = *reply
+		}
+		errRet = err
+
 	default:
 		errRet = errors.New(fmt.Sprintf("Unsupport method %v", c.Method))
 	}

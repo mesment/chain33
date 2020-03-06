@@ -7,28 +7,32 @@ package autotest
 import (
 	"strconv"
 
-	. "github.com/33cn/chain33/cmd/autotest/types"
+	"github.com/33cn/chain33/cmd/autotest/types"
 )
 
+// TransferCase transfer case
 type TransferCase struct {
-	BaseCase
+	types.BaseCase
 	From   string `toml:"from"`
 	To     string `toml:"to"`
 	Amount string `toml:"amount"`
 }
 
+// TransferPack transfer pack
 type TransferPack struct {
-	BaseCasePack
+	types.BaseCasePack
 }
 
-func (testCase *TransferCase) SendCommand(packID string) (PackFunc, error) {
+// SendCommand sed command
+func (testCase *TransferCase) SendCommand(packID string) (types.PackFunc, error) {
 
-	return DefaultSend(testCase, &TransferPack{}, packID)
+	return types.DefaultSend(testCase, &TransferPack{}, packID)
 }
 
+// GetCheckHandlerMap get check handle for map
 func (pack *TransferPack) GetCheckHandlerMap() interface{} {
 
-	funcMap := make(CheckHandlerMapDiscard, 2)
+	funcMap := make(types.CheckHandlerMapDiscard, 2)
 	funcMap["balance"] = pack.checkBalance
 
 	return funcMap
@@ -43,8 +47,14 @@ func (pack *TransferPack) checkBalance(txInfo map[string]interface{}) bool {
 	logFee := logArr[0].(map[string]interface{})["log"].(map[string]interface{})
 	logSend := logArr[1].(map[string]interface{})["log"].(map[string]interface{})
 	logRecv := logArr[2].(map[string]interface{})["log"].(map[string]interface{})
-	fee, _ := strconv.ParseFloat(feeStr, 64)
-	Amount, _ := strconv.ParseFloat(interCase.Amount, 64)
+	fee, err := strconv.ParseFloat(feeStr, 64)
+	if err != nil {
+		return false
+	}
+	Amount, err := strconv.ParseFloat(interCase.Amount, 64)
+	if err != nil {
+		return false
+	}
 
 	pack.FLog.Info("TransferBalanceDetails", "TestID", pack.PackID,
 		"Fee", feeStr, "Amount", interCase.Amount,
@@ -57,10 +67,10 @@ func (pack *TransferPack) checkBalance(txInfo map[string]interface{}) bool {
 	//transfer to contract, deposit
 	if len(logArr) == 4 {
 		logDeposit := logArr[3].(map[string]interface{})["log"].(map[string]interface{})
-		depositCheck = CheckBalanceDeltaWithAddr(logDeposit, interCase.From, Amount)
+		depositCheck = types.CheckBalanceDeltaWithAddr(logDeposit, interCase.From, Amount)
 	}
 
-	return CheckBalanceDeltaWithAddr(logFee, interCase.From, -fee) &&
-		CheckBalanceDeltaWithAddr(logSend, interCase.From, -Amount) &&
-		CheckBalanceDeltaWithAddr(logRecv, interCase.To, Amount) && depositCheck
+	return types.CheckBalanceDeltaWithAddr(logFee, interCase.From, -fee) &&
+		types.CheckBalanceDeltaWithAddr(logSend, interCase.From, -Amount) &&
+		types.CheckBalanceDeltaWithAddr(logRecv, interCase.To, Amount) && depositCheck
 }

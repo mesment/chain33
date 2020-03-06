@@ -11,8 +11,11 @@ import (
 
 	"github.com/33cn/chain33/common"
 	"github.com/33cn/chain33/types"
+
+	_ "github.com/33cn/chain33/system/dapp/coins/types" //load system plugin
 )
 
+// DecodeLog decode log
 func DecodeLog(execer []byte, rlog *ReceiptData) (*ReceiptDataResult, error) {
 	var rTy string
 	switch rlog.Ty {
@@ -23,7 +26,7 @@ func DecodeLog(execer []byte, rlog *ReceiptData) (*ReceiptDataResult, error) {
 	case 2:
 		rTy = "ExecOk"
 	default:
-		rTy = "Unkown"
+		rTy = "Unknown"
 	}
 	rd := &ReceiptDataResult{Ty: rlog.Ty, TyName: rTy}
 	for _, l := range rlog.Logs {
@@ -38,7 +41,7 @@ func DecodeLog(execer []byte, rlog *ReceiptData) (*ReceiptDataResult, error) {
 			lTy = "unkownType"
 			logIns = nil
 		} else {
-			logIns, err = logType.Json(lLog)
+			logIns, _ = logType.JSON(lLog)
 			lTy = logType.Name()
 		}
 		rd.Logs = append(rd.Logs, &ReceiptLogResult{Ty: l.Ty, TyName: lTy, Log: logIns, RawLog: l.Log})
@@ -46,7 +49,8 @@ func DecodeLog(execer []byte, rlog *ReceiptData) (*ReceiptDataResult, error) {
 	return rd, nil
 }
 
-func ConvertWalletTxDetailToJson(in *types.WalletTxDetails, out *WalletTxDetails) error {
+// ConvertWalletTxDetailToJSON conver the wallet tx detail to json
+func ConvertWalletTxDetailToJSON(in *types.WalletTxDetails, out *WalletTxDetails) error {
 	if in == nil || out == nil {
 		return types.ErrInvalidParam
 	}
@@ -66,6 +70,11 @@ func ConvertWalletTxDetailToJson(in *types.WalletTxDetails, out *WalletTxDetails
 		if err != nil {
 			continue
 		}
+		if tx.Tx.IsWithdraw() {
+			//swap from and to
+			tx.Fromaddr, tx.Tx.To = tx.Tx.To, tx.Fromaddr
+			tran.To = tx.Tx.GetRealToAddr()
+		}
 		out.TxDetails = append(out.TxDetails, &WalletTxDetail{
 			Tx:         tran,
 			Receipt:    rd,
@@ -81,6 +90,7 @@ func ConvertWalletTxDetailToJson(in *types.WalletTxDetails, out *WalletTxDetails
 	return nil
 }
 
+// DecodeTx docode transaction
 func DecodeTx(tx *types.Transaction) (*Transaction, error) {
 	if tx == nil {
 		return nil, types.ErrEmpty
@@ -100,7 +110,7 @@ func DecodeTx(tx *types.Transaction) (*Transaction, error) {
 	}
 	var pljson json.RawMessage
 	if pl != nil {
-		pljson, _ = types.PBToJson(pl)
+		pljson, _ = types.PBToJSONUTF8(pl)
 	}
 	result := &Transaction{
 		Execer:     string(tx.Execer),
@@ -119,9 +129,7 @@ func DecodeTx(tx *types.Transaction) (*Transaction, error) {
 		GroupCount: tx.GroupCount,
 		Header:     common.ToHex(tx.Header),
 		Next:       common.ToHex(tx.Next),
-	}
-	if result.Amount != 0 {
-		result.AmountFmt = strconv.FormatFloat(float64(result.Amount)/float64(types.Coin), 'f', 4, 64)
+		Hash:       common.ToHex(tx.Hash()),
 	}
 	feeResult := strconv.FormatFloat(float64(tx.Fee)/float64(types.Coin), 'f', 4, 64)
 	result.FeeFmt = feeResult

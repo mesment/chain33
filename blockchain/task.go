@@ -12,16 +12,18 @@ import (
 	"github.com/33cn/chain33/types"
 )
 
+//Task 任务
 type Task struct {
 	sync.Mutex
-	cond     *sync.Cond
-	start    int64
-	end      int64
-	isruning bool
-	ticker   *time.Timer
-	timeout  time.Duration
-	cb       func()
-	donelist map[int64]struct{}
+	cond      *sync.Cond
+	start     int64
+	end       int64
+	isruning  bool
+	ticker    *time.Timer
+	timeout   time.Duration
+	cb        func()
+	donelist  map[int64]struct{}
+	timeoutcb func(height int64)
 }
 
 func newTask(timeout time.Duration) *Task {
@@ -42,28 +44,34 @@ func (t *Task) tick() {
 		t.cond.L.Unlock()
 		_, ok := <-t.ticker.C
 		if !ok {
-			chainlog.Error("task is done", "timer is stop", t.start)
+			chainlog.Error("task is done", "timer ticker is stop", t.start)
 			continue
 		}
 		t.Lock()
 		if err := t.stop(false); err == nil {
-			chainlog.Debug("task is done", "timer is stop", t.start)
+			if t.timeoutcb != nil {
+				go t.timeoutcb(t.start)
+			}
+			chainlog.Debug("task is done", "timer timeout is stop", t.start)
 		}
 		t.Unlock()
 	}
 }
 
+//InProgress 是否在执行
 func (t *Task) InProgress() bool {
 	t.Lock()
 	defer t.Unlock()
 	return t.isruning
 }
 
+//TimerReset 计时器重置
 func (t *Task) TimerReset(timeout time.Duration) {
 	t.TimerStop()
 	t.ticker.Reset(timeout)
 }
 
+//TimerStop 计时器停止
 func (t *Task) TimerStop() {
 	if !t.ticker.Stop() {
 		select {
@@ -73,11 +81,12 @@ func (t *Task) TimerStop() {
 	}
 }
 
-func (t *Task) Start(start, end int64, cb func()) error {
+//Start 计时器启动
+func (t *Task) Start(start, end int64, cb func(), timeoutcb func(height int64)) error {
 	t.Lock()
 	defer t.Unlock()
 	if t.isruning {
-		return errors.New("task is runing")
+		return errors.New("task is running")
 	}
 	if start > end {
 		return types.ErrStartBigThanEnd
@@ -88,11 +97,13 @@ func (t *Task) Start(start, end int64, cb func()) error {
 	t.start = start
 	t.end = end
 	t.cb = cb
+	t.timeoutcb = timeoutcb
 	t.donelist = make(map[int64]struct{})
 	t.cond.Signal()
 	return nil
 }
 
+//Done 任务完成
 func (t *Task) Done(height int64) {
 	t.Lock()
 	defer t.Unlock()
@@ -108,7 +119,7 @@ func (t *Task) Done(height int64) {
 
 func (t *Task) stop(runcb bool) error {
 	if !t.isruning {
-		return errors.New("not runing")
+		return errors.New("not running")
 	}
 	t.isruning = false
 	if t.cb != nil && runcb {
@@ -118,6 +129,7 @@ func (t *Task) stop(runcb bool) error {
 	return nil
 }
 
+//Cancel 任务取消
 func (t *Task) Cancel() error {
 	t.Lock()
 	defer t.Unlock()
@@ -139,7 +151,10 @@ func (t *Task) done(height int64) {
 		}
 		if t.start > t.end {
 			chainlog.Debug("----task is done----")
-			t.stop(true)
+			err := t.stop(true)
+			if err != nil {
+				chainlog.Debug("----task stop error ----", "err", err)
+			}
 		}
 	}
 	t.donelist[height] = struct{}{}

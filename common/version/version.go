@@ -2,25 +2,32 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package version 软件版本号
 package version
 
-const version = "5.3.0"
+const version = "6.3.0"
 
+//var
 var (
 	WalletVerKey     = []byte("WalletVerKey")
 	BlockChainVerKey = []byte("BlockChainVerKey")
 	LocalDBMeta      = []byte("LocalDBMeta")
+	StoreDBMeta      = []byte("StoreDBMeta")
 	MavlTreeVerKey   = []byte("MavlTreeVerKey")
-	localversion     = "1.0.0"
+	localversion     = "2.0.0"
+	storeversion     = "1.0.0"
+	appversion       = "1.0.0"
 	GitCommit        string
 )
 
+//GetLocalDBKeyList 获取本地key列表
 func GetLocalDBKeyList() [][]byte {
 	return [][]byte{
-		WalletVerKey, BlockChainVerKey, LocalDBMeta, MavlTreeVerKey,
+		WalletVerKey, BlockChainVerKey, LocalDBMeta, StoreDBMeta, MavlTreeVerKey,
 	}
 }
 
+//GetVersion 获取版本信息
 func GetVersion() string {
 	if GitCommit != "" {
 		return version + "-" + GitCommit
@@ -37,10 +44,39 @@ func GetLocalDBVersion() string {
 	return localversion
 }
 
-//SetLocalDBVersion only used for test
-//通过设置版本号，强制重建数据库
+//SetLocalDBVersion 通过设置版本号，强制重建数据库
 func SetLocalDBVersion(version string) {
-	localversion = version
+	if version != "" {
+		localversion = version
+	}
+}
+
+//GetStoreDBVersion 数据库版本解析
+/*
+格式: v1.v2.v3
+如果: v1 升级了， 那么意味着storedb 需要升级
+*/
+func GetStoreDBVersion() string {
+	return storeversion
+}
+
+//SetStoreDBVersion 通过设置版本号，强制重建数据库
+func SetStoreDBVersion(version string) {
+	if version != "" {
+		storeversion = version
+	}
+}
+
+//GetAppVersion 获取应用 app 的版本
+func GetAppVersion() string {
+	return appversion
+}
+
+//SetAppVersion 设置饮用的版本
+func SetAppVersion(version string) {
+	if version != "" {
+		appversion = version
+	}
 }
 
 //v0.1.2
@@ -59,8 +95,11 @@ func SetLocalDBVersion(version string) {
 // blcokchain db
 //	ver=1:增加地址参与交易量的记录，
 // wallet db:
-//	ver=1:增加rescan的功能，自动将wallet账户相关的tx交易信息重新扫描从blockchian模块
+//	ver=1:增加rescan的功能，自动将wallet账户相关的tx交易信息重新扫描从blockchain模块
 // state mavltree db
 
 //v5.3.0
 //hard fork for bug
+
+//v6.2.0
+//性能加速+mempool 阶梯手续费防止大区块攻击

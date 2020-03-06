@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package merkle 实现默克尔树相关的hash计算
 package merkle
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"runtime"
 
+	"github.com/33cn/chain33/common"
 	"github.com/33cn/chain33/types"
 )
 
@@ -47,7 +49,141 @@ known ways of changing the transactions without affecting the merkle
 root.
 */
 
-/* This implements a constant-space merkle root/path calculator, limited to 2^32 leaves. */
+/*GetMerkleRoot This implements a constant-space merkle root/path calculator, limited to 2^32 leaves. */
+//flage =1 只计算roothash  flage =2 只计算branch  flage =3 计算roothash 和 branch
+func getMerkleRoot(hashes [][]byte) []byte {
+	cache := make([]byte, 64)
+	level := 0
+	for len(hashes) > 1 {
+		if len(hashes)&1 != 0 { //奇数
+			hashes = append(hashes, hashes[len(hashes)-1])
+		}
+		index := 0
+		for i := 0; i < len(hashes); i += 2 {
+			hashes[index] = GetHashFromTwoHash(cache, hashes[i], hashes[i+1])
+			index++
+		}
+		level++
+		hashes = hashes[0:index]
+	}
+	if len(hashes) == 0 {
+		return nil
+	}
+	return hashes[0]
+}
+
+func log2(data int) int {
+	level := 1
+	if data <= 0 {
+		return 0
+	}
+	for {
+		data = data / 2
+		if data <= 1 {
+			return level
+		}
+		level++
+	}
+}
+
+func pow2(d int) (p int) {
+	if d <= 0 {
+		return 1
+	}
+	p = 1
+	for i := 0; i < d; i++ {
+		p *= 2
+	}
+	return p
+}
+
+func calcLevel(n int) int {
+	if n == 1 {
+		return 1
+	}
+	level := 0
+	for n > 1 {
+		if n&1 != 0 {
+			n++
+		}
+		n = n / 2
+		level++
+	}
+	return level
+}
+
+func getMerkleRootPad(hashes [][]byte, step int) []byte {
+	level1 := calcLevel(len(hashes))
+	level2 := log2(step)
+	var root []byte
+	cache := make([]byte, 64)
+	if len(hashes) == 1 {
+		root = GetHashFromTwoHash(cache, hashes[0], hashes[0])
+	} else {
+		root = getMerkleRoot(hashes)
+	}
+	for i := 0; i < level2-level1; i++ {
+		root = GetHashFromTwoHash(cache, root, root)
+	}
+	return root
+}
+
+type childstate struct {
+	hash  []byte
+	index int
+}
+
+//GetMerkleRoot 256构成一个组，进行计算
+// n * step = hashes
+// (hashes / n)
+func GetMerkleRoot(hashes [][]byte) []byte {
+	ncpu := runtime.NumCPU()
+	if len(hashes) <= 80 || ncpu <= 1 {
+		return getMerkleRoot(hashes)
+	}
+	step := log2(len(hashes) / ncpu)
+	if step < 1 {
+		step = 1
+	}
+	step = pow2(step)
+	if step > 256 {
+		step = 256
+	}
+	ch := make(chan *childstate, 10)
+	//pad to step
+	rem := len(hashes) % step
+	l := len(hashes) / step
+	if rem != 0 {
+		l++
+	}
+	for i := 0; i < l; i++ {
+		end := (i + 1) * step
+		if end > len(hashes) {
+			end = len(hashes)
+		}
+		child := hashes[i*step : end]
+		go func(index int, h [][]byte) {
+			var subhash []byte
+			if len(h) != step {
+				subhash = getMerkleRootPad(h, step)
+			} else {
+				subhash = getMerkleRoot(h)
+			}
+			ch <- &childstate{
+				hash:  subhash,
+				index: index,
+			}
+		}(i, child)
+	}
+	childlist := make([][]byte, l)
+	for i := 0; i < l; i++ {
+		sub := <-ch
+		childlist[sub.index] = sub.hash
+	}
+	return getMerkleRoot(childlist)
+}
+
+/*Computation This implements a constant-space merkle root/path calculator, limited to 2^32 leaves. */
 //flage =1 只计算roothash  flage =2 只计算branch  flage =3 计算roothash 和 branch
 func Computation(leaves [][]byte, flage int, branchpos uint32) (roothash []byte, mutated bool, pbranch [][]byte) {
 	if len(leaves) == 0 {
@@ -65,6 +201,7 @@ func Computation(leaves [][]byte, flage int, branchpos uint32) (roothash []byte,
 	var matchlevel uint32 = 0xff
 	mutated = false
 	var matchh bool
+	cache := make([]byte, 64)
 	for count, h = range leaves {
 
 		if (uint32(count) == branchpos) && (flage&2) != 0 {
@@ -88,7 +225,7 @@ func Computation(leaves [][]byte, flage int, branchpos uint32) (roothash []byte,
 				mutated = true
 			}
 			//计算inner[level] + h 的hash值
-			h = GetHashFromTwoHash(inner[level], h)
+			h = GetHashFromTwoHash(cache, inner[level], h)
 		}
 		inner[level] = h
 		if matchh {
@@ -104,7 +241,7 @@ func Computation(leaves [][]byte, flage int, branchpos uint32) (roothash []byte,
 		if (flage&2) != 0 && matchh {
 			branch = append(branch, h)
 		}
-		h = GetHashFromTwoHash(h, h)
+		h = GetHashFromTwoHash(cache, h, h)
 		count += (1 << level)
 		level++
 		// And propagate the result upwards accordingly.
@@ -117,60 +254,45 @@ func Computation(leaves [][]byte, flage int, branchpos uint32) (roothash []byte,
 					matchh = true
 				}
 			}
-			h = GetHashFromTwoHash(inner[level], h)
+			h = GetHashFromTwoHash(cache, inner[level], h)
 			level++
 		}
 	}
 	return h, mutated, branch
 }
 
-//计算左右节点hash的父hash
-func GetHashFromTwoHash(left []byte, right []byte) []byte {
+//GetHashFromTwoHash 计算左右节点hash的父hash
+func GetHashFromTwoHash(parent []byte, left []byte, right []byte) []byte {
 	if left == nil || right == nil {
 		return nil
 	}
-	leftlen := len(left)
-	rightlen := len(right)
-
-	parent := make([]byte, leftlen+rightlen)
-
 	copy(parent, left)
-	copy(parent[leftlen:], right)
-	hash := sha256.Sum256(parent)
-	parenthash := sha256.Sum256(hash[:])
-	return parenthash[:]
+	copy(parent[32:], right)
+	return common.Sha2Sum(parent)
 }
 
-//获取merkle roothash
-func GetMerkleRoot(leaves [][]byte) (roothash []byte) {
-	if leaves == nil {
-		return nil
-	}
-	proothash, _, _ := Computation(leaves, 1, 0)
-	return proothash
-}
-
-//获取指定txindex的branch position 从0开始
+//GetMerkleBranch 获取指定txindex的branch position 从0开始
 func GetMerkleBranch(leaves [][]byte, position uint32) [][]byte {
 	_, _, branchs := Computation(leaves, 2, position)
 	return branchs
 }
 
-// 通过branch 获取对应的roothash 用于指定txhash的proof证明
+//GetMerkleRootFromBranch 通过branch 获取对应的roothash 用于指定txhash的proof证明
 func GetMerkleRootFromBranch(merkleBranch [][]byte, leaf []byte, Index uint32) []byte {
 	hash := leaf
+	hashcache := make([]byte, 64)
 	for _, branch := range merkleBranch {
 		if (Index & 1) != 0 {
-			hash = GetHashFromTwoHash(branch, hash)
+			hash = GetHashFromTwoHash(hashcache, branch, hash)
 		} else {
-			hash = GetHashFromTwoHash(hash, branch)
+			hash = GetHashFromTwoHash(hashcache, hash, branch)
 		}
 		Index >>= 1
 	}
 	return hash
 }
 
-//获取merkle roothash 以及指定tx index的branch，注释：position从0开始
+//GetMerkleRootAndBranch 获取merkle roothash 以及指定tx index的branch，注释：position从0开始
 func GetMerkleRootAndBranch(leaves [][]byte, position uint32) (roothash []byte, branchs [][]byte) {
 	roothash, _, branchs = Computation(leaves, 3, position)
 	return
@@ -178,7 +300,17 @@ func GetMerkleRootAndBranch(leaves [][]byte, position uint32) (roothash []byte, 
 
 var zeroHash [32]byte
 
-func CalcMerkleRoot(txs []*types.Transaction) []byte {
+//CalcMerkleRoot 计算merkle树根
+func CalcMerkleRoot(cfg *types.Chain33Config, height int64, txs []*types.Transaction) []byte {
+	if !cfg.IsFork(height, "ForkRootHash") {
+		return calcMerkleRoot(txs)
+	}
+	calcHash, _ := calcMultiLayerMerkleInfo(txs)
+	return calcHash
+}
+
+//calcMerkleRoot 计算merkle树根hash
+func calcMerkleRoot(txs []*types.Transaction) []byte {
 	var hashes [][]byte
 	for _, tx := range txs {
 		hashes = append(hashes, tx.Hash())
@@ -193,6 +325,23 @@ func CalcMerkleRoot(txs []*types.Transaction) []byte {
 	return merkleroot
 }
 
+//calcSingleLayerMerkleRoot 计算单层merkle树根hash使用fullhash
+func calcSingleLayerMerkleRoot(txs []*types.Transaction) []byte {
+	var hashes [][]byte
+	for _, tx := range txs {
+		hashes = append(hashes, tx.FullHash())
+	}
+	if hashes == nil {
+		return zeroHash[:]
+	}
+	merkleroot := GetMerkleRoot(hashes)
+	if merkleroot == nil {
+		panic("calc merkle root error")
+	}
+	return merkleroot
+}
+
+//CalcMerkleRootCache 计算merkle树根缓存
 func CalcMerkleRootCache(txs []*types.TransactionCache) []byte {
 	var hashes [][]byte
 	for _, tx := range txs {
@@ -206,4 +355,82 @@ func CalcMerkleRootCache(txs []*types.TransactionCache) []byte {
 		panic("calc merkle root error")
 	}
 	return merkleroot
+}
+
+//CalcMultiLayerMerkleInfo 计算多层merkle树根hash以及子链根hash信息
+func CalcMultiLayerMerkleInfo(cfg *types.Chain33Config, height int64, txs []*types.Transaction) ([]byte, []types.ChildChain) {
+	if !cfg.IsFork(height, "ForkRootHash") {
+		return nil, nil
+	}
+	return calcMultiLayerMerkleInfo(txs)
+}
+
+//calcMultiLayerMerkleInfo 计算多层merkle树根hash使用fullhash
+//1,交易列表中都是主链的交易
+//2,交易列表中都是某个平行链的交易（平行链节点上的情况）
+//3,交易列表中是主链和平行链交易都存在，及混合交易
+func calcMultiLayerMerkleInfo(txs []*types.Transaction) ([]byte, []types.ChildChain) {
+	var fristParaTitle string
+	var childchains []types.ChildChain
+
+	txsCount := len(txs)
+	if txsCount == 0 {
+		return zeroHash[:], nil
+	}
+	//需要区分交易列表中是否是同一个链的交易，
+	//混合链的交易需要找到每个链的第一笔交易，方便子链roothash的并行计算
+	for i, tx := range txs {
+		paraTitle, haveParaTx := types.GetParaExecTitleName(string(tx.Execer))
+		//记录主链交易的index。主链交易肯定是从0开始的
+		if !haveParaTx && 0 == i {
+			childchains = append(childchains, types.ChildChain{Title: types.MainChainName, StartIndex: 0})
+		} else if (haveParaTx && 0 == len(fristParaTitle)) || (haveParaTx && paraTitle != fristParaTitle) {
+			//第一个平行链交易或者不同平行链的交易需要更新fristParaTitle以及子链信息
+			fristParaTitle = paraTitle
+			childchains = append(childchains, types.ChildChain{Title: paraTitle, StartIndex: int32(i)})
+		}
+	}
+	chainCount := len(childchains)
+
+	//全是主链或者全是同一个平行链的交易。
+	//直接调用calcSingleLayerMerkleRoot计算roothash即可
+	if chainCount <= 1 {
+		merkleRoot := calcSingleLayerMerkleRoot(txs)
+		childchains[0].ChildHash = merkleRoot
+		childchains[0].TxCount = int32(txsCount)
+		return merkleRoot, childchains
+	}
+
+	//并行计算每个子链的roothash
+	ch := make(chan *childstate, chainCount)
+	for index := 0; index < chainCount; index++ {
+
+		start := childchains[index].StartIndex
+		var end int
+		if index == chainCount-1 {
+			end = txsCount
+		} else {
+			end = int(childchains[index+1].StartIndex)
+		}
+		childchains[index].TxCount = int32(end) - start
+		go func(index int, subtxs []*types.Transaction) {
+			subChainRoot := calcSingleLayerMerkleRoot(subtxs)
+			ch <- &childstate{
+				hash:  subChainRoot,
+				index: index,
+			}
+		}(index, txs[start:end])
+	}
+
+	childlist := make([][]byte, chainCount)
+	for i := 0; i < chainCount; i++ {
+		sub := <-ch
+		childlist[sub.index] = sub.hash
+		childchains[sub.index].ChildHash = sub.hash
+	}
+	merkleroot := GetMerkleRoot(childlist)
+	if merkleroot == nil {
+		panic("calc merkle root is nil!")
+	}
+	return merkleroot, childchains
 }

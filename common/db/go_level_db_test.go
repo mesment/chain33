@@ -23,12 +23,30 @@ func TestGoLevelDBIterator(t *testing.T) {
 	dir, err := ioutil.TempDir("", "goleveldb")
 	require.NoError(t, err)
 	t.Log(dir)
-
 	leveldb, err := NewGoLevelDB("goleveldb", dir, 128)
 	require.NoError(t, err)
 	defer leveldb.Close()
-
 	testDBIterator(t, leveldb)
+}
+
+func TestGoLevelDBIteratorAll(t *testing.T) {
+	dir, err := ioutil.TempDir("", "goleveldb")
+	require.NoError(t, err)
+	t.Log(dir)
+	leveldb, err := NewGoLevelDB("goleveldb", dir, 128)
+	require.NoError(t, err)
+	defer leveldb.Close()
+	testDBIteratorAllKey(t, leveldb)
+}
+
+func TestGoLevelDBIteratorReserverExample(t *testing.T) {
+	dir, err := ioutil.TempDir("", "goleveldb")
+	require.NoError(t, err)
+	t.Log(dir)
+	leveldb, err := NewGoLevelDB("goleveldb", dir, 128)
+	require.NoError(t, err)
+	defer leveldb.Close()
+	testDBIteratorReserverExample(t, leveldb)
 }
 
 func TestGoLevelDBIteratorDel(t *testing.T) {
@@ -41,6 +59,28 @@ func TestGoLevelDBIteratorDel(t *testing.T) {
 	defer leveldb.Close()
 
 	testDBIteratorDel(t, leveldb)
+}
+
+func TestLevelDBBatch(t *testing.T) {
+	dir, err := ioutil.TempDir("", "goleveldb")
+	require.NoError(t, err)
+	t.Log(dir)
+
+	leveldb, err := NewGoLevelDB("goleveldb", dir, 128)
+	require.NoError(t, err)
+	defer leveldb.Close()
+	testBatch(t, leveldb)
+}
+
+func TestLevelDBTransaction(t *testing.T) {
+	dir, err := ioutil.TempDir("", "goleveldb")
+	require.NoError(t, err)
+	t.Log(dir)
+
+	leveldb, err := NewGoLevelDB("goleveldb", dir, 128)
+	require.NoError(t, err)
+	defer leveldb.Close()
+	testTransaction(t, leveldb)
 }
 
 // leveldb边界测试
@@ -188,8 +228,8 @@ func BenchmarkRandomReadsWrites(b *testing.B) {
 			idx := (int64(RandInt()) % numItems)
 			internal[idx]++
 			val := internal[idx]
-			idxBytes := int642Bytes(int64(idx))
-			valBytes := int642Bytes(int64(val))
+			idxBytes := int642Bytes(idx)
+			valBytes := int642Bytes(val)
 			//fmt.Printf("Set %X -> %X\n", idxBytes, valBytes)
 			db.Set(
 				idxBytes,
@@ -200,7 +240,7 @@ func BenchmarkRandomReadsWrites(b *testing.B) {
 		{
 			idx := (int64(RandInt()) % numItems)
 			val := internal[idx]
-			idxBytes := int642Bytes(int64(idx))
+			idxBytes := int642Bytes(idx)
 			valBytes, _ := db.Get(idxBytes)
 			//fmt.Printf("Get %X -> %X\n", idxBytes, valBytes)
 			if val == 0 {
@@ -236,4 +276,17 @@ func int642Bytes(i int64) []byte {
 
 func bytes2Int64(buf []byte) int64 {
 	return int64(binary.BigEndian.Uint64(buf))
+}
+
+// leveldb返回值测试
+func TestGoLevelDBResult(t *testing.T) {
+	dir, err := ioutil.TempDir("", "goleveldb")
+	require.NoError(t, err)
+	t.Log(dir)
+
+	leveldb, err := NewGoLevelDB("goleveldb", dir, 128)
+	require.NoError(t, err)
+	defer leveldb.Close()
+
+	testDBIteratorResult(t, leveldb)
 }

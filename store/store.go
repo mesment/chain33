@@ -2,23 +2,26 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package store store the world - state data
 package store
 
-//store package store the world - state data
 import (
 	"github.com/33cn/chain33/queue"
 	"github.com/33cn/chain33/system/store"
 	"github.com/33cn/chain33/types"
 )
 
-func New(cfg *types.Store, sub map[string][]byte) queue.Module {
-	s, err := store.Load(cfg.Name)
+// New new store queue module
+func New(cfg *types.Chain33Config) queue.Module {
+	mcfg := cfg.GetModuleConfig().Store
+	sub := cfg.GetSubConfig().Store
+	s, err := store.Load(mcfg.Name)
 	if err != nil {
-		panic("Unsupported store type:" + cfg.Name + " " + err.Error())
+		panic("Unsupported store type:" + mcfg.Name + " " + err.Error())
 	}
-	subcfg, ok := sub[cfg.Name]
+	subcfg, ok := sub[mcfg.Name]
 	if !ok {
 		subcfg = nil
 	}
-	return s(cfg, subcfg)
+	return s(mcfg, subcfg, cfg)
 }

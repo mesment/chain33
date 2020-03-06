@@ -7,6 +7,7 @@ package types
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ func isExported(name string) bool {
 	return unicode.IsUpper(rune)
 }
 
+// ListActionMethod list action的所有的方法
 func ListActionMethod(action interface{}, funclist []interface{}) map[string]reflect.Method {
 	typ := reflect.TypeOf(action)
 	flist := buildFuncList(funclist)
@@ -58,6 +60,7 @@ func ListActionMethod(action interface{}, funclist []interface{}) map[string]ref
 	return methods
 }
 
+// ListType list type
 func ListType(tys []interface{}) map[string]reflect.Type {
 	typelist := make(map[string]reflect.Type)
 	for _, ty := range tys {
@@ -67,11 +70,13 @@ func ListType(tys []interface{}) map[string]reflect.Type {
 	return typelist
 }
 
+// ListMethod list Method
 func ListMethod(action interface{}) map[string]reflect.Method {
 	typ := reflect.TypeOf(action)
 	return ListMethodByType(typ)
 }
 
+// ListMethodByType list Method 通过type类型
 func ListMethodByType(typ reflect.Type) map[string]reflect.Method {
 	methods := make(map[string]reflect.Method)
 	for m := 0; m < typ.NumMethod(); m++ {
@@ -87,48 +92,46 @@ func ListMethodByType(typ reflect.Type) map[string]reflect.Method {
 	return methods
 }
 
-type ExecutorAction interface {
-	GetTy() int32
-}
-
 var nilValue = reflect.ValueOf(nil)
 
-func GetActionValue(action interface{}, funclist map[string]reflect.Method) (string, int32, reflect.Value) {
+// GetActionValue 获取执行器的action value
+func GetActionValue(action interface{}, funclist map[string]reflect.Method) (vname string, vty int32, v reflect.Value, err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			vname = ""
+			vty = 0
+			v = nilValue
+			err = ErrDecode
+		}
+	}()
 	var ty int32
-	if a, ok := action.(ExecutorAction); ok {
+	if a, ok := action.(execTypeGet); ok {
 		ty = a.GetTy()
 	}
 	value := reflect.ValueOf(action)
 	if _, ok := funclist["GetValue"]; !ok {
-		return "", 0, nilValue
+		return "", 0, nilValue, ErrDecode
 	}
 	rcvr := funclist["GetValue"].Func.Call([]reflect.Value{value})
-	if !IsOK(rcvr, 1) || IsNil(rcvr[0]) {
-		return "", 0, nilValue
-	}
-	if rcvr[0].Kind() != reflect.Ptr && rcvr[0].Kind() != reflect.Interface {
-		return "", 0, nilValue
-	}
 	elem := rcvr[0].Elem()
-	if IsNil(elem) {
-		return "", 0, nilValue
-	}
 	sname := elem.Type().String()
-	datas := strings.Split(sname, "_")
-	if len(datas) != 2 {
-		return "", 0, nilValue
+	index := strings.LastIndex(sname, "_")
+	if index == -1 || index == (len(sname)-1) {
+		return "", 0, nilValue, ErrDecode
 	}
-	funcname := "Get" + datas[1]
+	tyname := sname[index+1:]
+	funcname := "Get" + tyname
 	if _, ok := funclist[funcname]; !ok {
-		return "", 0, nilValue
+		return "", 0, nilValue, ErrDecode
 	}
 	val := funclist[funcname].Func.Call([]reflect.Value{value})
-	if !IsOK(val, 1) || IsNil(val[0]) {
-		return "", 0, nilValue
+	if len(val) == 0 || val[0].IsNil() {
+		return "", 0, nilValue, ErrDecode
 	}
-	return datas[1], ty, val[0]
+	return tyname, ty, val[0], nil
 }
 
+// IsOK 是否存在
 func IsOK(list []reflect.Value, n int) bool {
 	if len(list) != n {
 		return false
@@ -141,6 +144,7 @@ func IsOK(list []reflect.Value, n int) bool {
 	return true
 }
 
+// CallQueryFunc 获取查询接口函数
 func CallQueryFunc(this reflect.Value, f reflect.Method, in Message) (reply Message, err error) {
 	valueret := f.Func.Call([]reflect.Value{this, reflect.ValueOf(in)})
 	if len(valueret) != 2 {
@@ -175,6 +179,7 @@ func CallQueryFunc(this reflect.Value, f reflect.Method, in Message) (reply Mess
 	return reply, err
 }
 
+// BuildQueryType 构建查询方法
 func BuildQueryType(prefix string, methods map[string]reflect.Method) (map[string]reflect.Method, map[string]reflect.Type) {
 	tys := make(map[string]reflect.Type)
 	ms := make(map[string]reflect.Method)
@@ -211,6 +216,7 @@ func BuildQueryType(prefix string, methods map[string]reflect.Method) (map[strin
 	return ms, tys
 }
 
+// QueryData 查询结构体
 type QueryData struct {
 	sync.RWMutex
 	prefix   string
@@ -219,6 +225,7 @@ type QueryData struct {
 	valueMap map[string]reflect.Value
 }
 
+// NewQueryData new一个新的QueryData
 func NewQueryData(prefix string) *QueryData {
 	data := &QueryData{
 		prefix:   prefix,
@@ -229,13 +236,15 @@ func NewQueryData(prefix string) *QueryData {
 	return data
 }
 
+// Register 注册
 func (q *QueryData) Register(key string, obj interface{}) {
 	if _, existed := q.funcMap[key]; existed {
-		panic("QueryData reg dup")
+		panic(fmt.Sprintf("QueryData Register dup for key=%s", key))
 	}
 	q.funcMap[key], q.typeMap[key] = BuildQueryType(q.prefix, ListMethod(obj))
 }
 
+// SetThis 设置
 func (q *QueryData) SetThis(key string, this reflect.Value) {
 	q.Lock()
 	defer q.Unlock()
@@ -249,6 +258,7 @@ func (q *QueryData) getThis(key string) (reflect.Value, bool) {
 	return v, ok
 }
 
+// GetFunc 获取函数
 func (q *QueryData) GetFunc(driver, name string) (reflect.Method, error) {
 	funclist, ok := q.funcMap[driver]
 	if !ok {
@@ -260,6 +270,7 @@ func (q *QueryData) GetFunc(driver, name string) (reflect.Method, error) {
 	return reflect.Method{}, ErrActionNotSupport
 }
 
+// GetType 获取类型
 func (q *QueryData) GetType(driver, name string) (reflect.Type, error) {
 	typelist, ok := q.typeMap[driver]
 	if !ok {
@@ -271,6 +282,7 @@ func (q *QueryData) GetType(driver, name string) (reflect.Type, error) {
 	return nil, ErrActionNotSupport
 }
 
+// Decode 编码
 func (q *QueryData) Decode(driver, name string, in []byte) (reply Message, err error) {
 	ty, err := q.GetType(driver, name)
 	if err != nil {
@@ -285,7 +297,8 @@ func (q *QueryData) Decode(driver, name string, in []byte) (reply Message, err e
 	return nil, ErrActionNotSupport
 }
 
-func (q *QueryData) DecodeJson(driver, name string, in json.Marshaler) (reply Message, err error) {
+// DecodeJSON 编码成json格式
+func (q *QueryData) DecodeJSON(driver, name string, in json.Marshaler) (reply Message, err error) {
 	ty, err := q.GetType(driver, name)
 	if err != nil {
 		return nil, err
@@ -297,12 +310,13 @@ func (q *QueryData) DecodeJson(driver, name string, in json.Marshaler) (reply Me
 		if err != nil {
 			return nil, err
 		}
-		err = JsonToPB(data, paramIn)
+		err = JSONToPB(data, paramIn)
 		return paramIn, err
 	}
 	return nil, ErrActionNotSupport
 }
 
+// Call 查询函数回调
 func (q *QueryData) Call(driver, name string, in Message) (reply Message, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -329,7 +343,7 @@ func (q *QueryData) Call(driver, name string, in Message) (reply Message, err er
 	return CallQueryFunc(m, f, in)
 }
 
-//判断所有的空值
+//IsNil 判断所有的空值
 func IsNil(a interface{}) (ok bool) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -345,7 +359,7 @@ func IsNil(a interface{}) (ok bool) {
 	return a == nil || reflect.ValueOf(a).IsNil()
 }
 
-//空指针或者接口
+//IsNilP 空指针或者接口
 func IsNilP(a interface{}) bool {
 	if a == nil {
 		return true

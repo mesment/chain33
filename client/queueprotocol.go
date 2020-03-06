@@ -55,34 +55,34 @@ func New(client queue.Client, option *QueueProtocolOption) (QueueProtocolAPI, er
 	if option != nil {
 		q.option = *option
 	} else {
-		q.option.SendTimeout = 600 * time.Second
-		q.option.WaitTimeout = 600 * time.Second
+		q.option.SendTimeout = time.Duration(-1)
+		q.option.WaitTimeout = time.Duration(-1)
 	}
 	return q, nil
 }
 
-func (q *QueueProtocol) query(topic string, ty int64, data interface{}) (queue.Message, error) {
+func (q *QueueProtocol) send(topic string, ty int64, data interface{}) (*queue.Message, error) {
 	client := q.client
 	msg := client.NewMessage(topic, ty, data)
 	err := client.SendTimeout(msg, true, q.option.SendTimeout)
 	if err != nil {
-		return queue.Message{}, err
+		return &queue.Message{}, err
 	}
 	return client.WaitTimeout(msg, q.option.WaitTimeout)
 }
 
-func (q *QueueProtocol) notify(topic string, ty int64, data interface{}) (queue.Message, error) {
+func (q *QueueProtocol) notify(topic string, ty int64, data interface{}) (*queue.Message, error) {
 	client := q.client
 	msg := client.NewMessage(topic, ty, data)
 	err := client.SendTimeout(msg, false, q.option.SendTimeout)
 	if err != nil {
-		return queue.Message{}, err
+		return &queue.Message{}, err
 	}
 	return msg, err
 }
 
 // Notify new and send client message
-func (q *QueueProtocol) Notify(topic string, ty int64, data interface{}) (queue.Message, error) {
+func (q *QueueProtocol) Notify(topic string, ty int64, data interface{}) (*queue.Message, error) {
 	return q.notify(topic, ty, data)
 }
 
@@ -92,7 +92,7 @@ func (q *QueueProtocol) Close() {
 }
 
 // NewMessage new message
-func (q *QueueProtocol) NewMessage(topic string, msgid int64, data interface{}) queue.Message {
+func (q *QueueProtocol) NewMessage(topic string, msgid int64, data interface{}) *queue.Message {
 	return q.client.NewMessage(topic, msgid, data)
 }
 
@@ -109,7 +109,7 @@ func (q *QueueProtocol) SendTx(param *types.Transaction) (*types.Reply, error) {
 		log.Error("SendTx", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(mempoolKey, types.EventTx, param)
+	msg, err := q.send(mempoolKey, types.EventTx, param)
 	if err != nil {
 		log.Error("SendTx", "Error", err.Error())
 		return nil, err
@@ -136,7 +136,7 @@ func (q *QueueProtocol) GetTxList(param *types.TxHashList) (*types.ReplyTxList, 
 		log.Error("GetTxList", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(mempoolKey, types.EventTxList, param)
+	msg, err := q.send(mempoolKey, types.EventTxList, param)
 	if err != nil {
 		log.Error("GetTxList", "Error", err.Error())
 		return nil, err
@@ -154,7 +154,7 @@ func (q *QueueProtocol) GetBlocks(param *types.ReqBlocks) (*types.BlockDetails, 
 		log.Error("GetBlocks", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetBlocks, param)
+	msg, err := q.send(blockchainKey, types.EventGetBlocks, param)
 	if err != nil {
 		log.Error("GetBlocks", "Error", err.Error())
 		return nil, err
@@ -171,12 +171,12 @@ func (q *QueueProtocol) GetBlocks(param *types.ReqBlocks) (*types.BlockDetails, 
 func (q *QueueProtocol) QueryTx(param *types.ReqHash) (*types.TransactionDetail, error) {
 	if param == nil {
 		err := types.ErrInvalidParam
-		log.Error("QueryTx", "Error", err)
+		log.Debug("QueryTx", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventQueryTx, param)
+	msg, err := q.send(blockchainKey, types.EventQueryTx, param)
 	if err != nil {
-		log.Error("QueryTx", "Error", err.Error())
+		log.Debug("QueryTx", "Error", err.Error())
 		return nil, err
 	}
 	if reply, ok := msg.GetData().(*types.TransactionDetail); ok {
@@ -192,7 +192,7 @@ func (q *QueueProtocol) GetTransactionByAddr(param *types.ReqAddr) (*types.Reply
 		log.Error("GetTransactionByAddr", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetTransactionByAddr, param)
+	msg, err := q.send(blockchainKey, types.EventGetTransactionByAddr, param)
 	if err != nil {
 		log.Error("GetTransactionByAddr", "Error", err.Error())
 		return nil, err
@@ -212,7 +212,7 @@ func (q *QueueProtocol) GetTransactionByHash(param *types.ReqHashes) (*types.Tra
 		log.Error("GetTransactionByHash", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetTransactionByHash, param)
+	msg, err := q.send(blockchainKey, types.EventGetTransactionByHash, param)
 	if err != nil {
 		log.Error("GetTransactionByHash", "Error", err.Error())
 		return nil, err
@@ -224,8 +224,8 @@ func (q *QueueProtocol) GetTransactionByHash(param *types.ReqHashes) (*types.Tra
 }
 
 // GetMempool get transactions from mempool
-func (q *QueueProtocol) GetMempool() (*types.ReplyTxList, error) {
-	msg, err := q.query(mempoolKey, types.EventGetMempool, &types.ReqNil{})
+func (q *QueueProtocol) GetMempool(req *types.ReqGetMempool) (*types.ReplyTxList, error) {
+	msg, err := q.send(mempoolKey, types.EventGetMempool, req)
 	if err != nil {
 		log.Error("GetMempool", "Error", err.Error())
 		return nil, err
@@ -236,197 +236,9 @@ func (q *QueueProtocol) GetMempool() (*types.ReplyTxList, error) {
 	return nil, types.ErrTypeAsset
 }
 
-// WalletGetAccountList get account list from wallet
-func (q *QueueProtocol) WalletGetAccountList(req *types.ReqAccountList) (*types.WalletAccounts, error) {
-	msg, err := q.query(walletKey, types.EventWalletGetAccountList, req)
-	if err != nil {
-		log.Error("WalletGetAccountList", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.WalletAccounts); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// NewAccount new account in wallet
-func (q *QueueProtocol) NewAccount(param *types.ReqNewAccount) (*types.WalletAccount, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("NewAccount", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventNewAccount, param)
-	if err != nil {
-		log.Error("NewAccount", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.WalletAccount); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletTransactionList get transactions from wallet
-func (q *QueueProtocol) WalletTransactionList(param *types.ReqWalletTransactionList) (*types.WalletTxDetails, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletTransactionList", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletTransactionList, param)
-	if err != nil {
-		log.Error("WalletTransactionList", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.WalletTxDetails); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletImportprivkey import privkey in wallet
-func (q *QueueProtocol) WalletImportprivkey(param *types.ReqWalletImportPrivkey) (*types.WalletAccount, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletImportprivkey", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletImportPrivkey, param)
-	if err != nil {
-		log.Error("WalletImportprivkey", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.WalletAccount); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletSendToAddress req send to address
-func (q *QueueProtocol) WalletSendToAddress(param *types.ReqWalletSendToAddress) (*types.ReplyHash, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletSendToAddress", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletSendToAddress, param)
-	if err != nil {
-		log.Error("WalletSendToAddress", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletSetFee set wallet transaction fee
-func (q *QueueProtocol) WalletSetFee(param *types.ReqWalletSetFee) (*types.Reply, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletSetFee", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletSetFee, param)
-	if err != nil {
-		log.Error("WalletSetFee", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.Reply); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletSetLabel set wallet address and label
-func (q *QueueProtocol) WalletSetLabel(param *types.ReqWalletSetLabel) (*types.WalletAccount, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletSetLabel", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletSetLabel, param)
-	if err != nil {
-		log.Error("WalletSetLabel", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.WalletAccount); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletMergeBalance merge balance to one address
-func (q *QueueProtocol) WalletMergeBalance(param *types.ReqWalletMergeBalance) (*types.ReplyHashes, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletMergeBalance", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletMergeBalance, param)
-	if err != nil {
-		log.Error("WalletMergeBalance", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.ReplyHashes); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletSetPasswd set wallet passwd
-func (q *QueueProtocol) WalletSetPasswd(param *types.ReqWalletSetPasswd) (*types.Reply, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletSetPasswd", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletSetPasswd, param)
-	if err != nil {
-		log.Error("WalletSetPasswd", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.Reply); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletLock lock wallet
-func (q *QueueProtocol) WalletLock() (*types.Reply, error) {
-	msg, err := q.query(walletKey, types.EventWalletLock, &types.ReqNil{})
-	if err != nil {
-		log.Error("WalletLock", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.Reply); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// WalletUnLock unlock wallet
-func (q *QueueProtocol) WalletUnLock(param *types.WalletUnLock) (*types.Reply, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("WalletUnLock", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventWalletUnLock, param)
-	if err != nil {
-		log.Error("WalletUnLock", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.Reply); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
 // PeerInfo query peer list
-func (q *QueueProtocol) PeerInfo() (*types.PeerList, error) {
-	msg, err := q.query(p2pKey, types.EventPeerInfo, &types.ReqNil{})
+func (q *QueueProtocol) PeerInfo(req *types.P2PGetPeerReq) (*types.PeerList, error) {
+	msg, err := q.send(p2pKey, types.EventPeerInfo, req)
 	if err != nil {
 		log.Error("PeerInfo", "Error", err.Error())
 		return nil, err
@@ -444,7 +256,7 @@ func (q *QueueProtocol) GetHeaders(param *types.ReqBlocks) (*types.Headers, erro
 		log.Error("GetHeaders", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetHeaders, param)
+	msg, err := q.send(blockchainKey, types.EventGetHeaders, param)
 	if err != nil {
 		log.Error("GetHeaders", "Error", err.Error())
 		return nil, err
@@ -457,12 +269,25 @@ func (q *QueueProtocol) GetHeaders(param *types.ReqBlocks) (*types.Headers, erro
 
 // GetLastMempool get transactions from last mempool
 func (q *QueueProtocol) GetLastMempool() (*types.ReplyTxList, error) {
-	msg, err := q.query(mempoolKey, types.EventGetLastMempool, &types.ReqNil{})
+	msg, err := q.send(mempoolKey, types.EventGetLastMempool, &types.ReqNil{})
 	if err != nil {
 		log.Error("GetLastMempool", "Error", err.Error())
 		return nil, err
 	}
 	if reply, ok := msg.GetData().(*types.ReplyTxList); ok {
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+// GetProperFee get proper fee from mempool
+func (q *QueueProtocol) GetProperFee(req *types.ReqProperFee) (*types.ReplyProperFee, error) {
+	msg, err := q.send(mempoolKey, types.EventGetProperFee, req)
+	if err != nil {
+		log.Error("GetProperFee", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyProperFee); ok {
 		return reply, nil
 	}
 	return nil, types.ErrTypeAsset
@@ -475,7 +300,7 @@ func (q *QueueProtocol) GetBlockOverview(param *types.ReqHash) (*types.BlockOver
 		log.Error("GetBlockOverview", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetBlockOverview, param)
+	msg, err := q.send(blockchainKey, types.EventGetBlockOverview, param)
 	if err != nil {
 		log.Error("GetBlockOverview", "Error", err.Error())
 		return nil, err
@@ -493,7 +318,7 @@ func (q *QueueProtocol) GetAddrOverview(param *types.ReqAddr) (*types.AddrOvervi
 		log.Error("GetAddrOverview", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetAddrOverview, param)
+	msg, err := q.send(blockchainKey, types.EventGetAddrOverview, param)
 	if err != nil {
 		log.Error("GetAddrOverview", "Error", err.Error())
 		return nil, err
@@ -511,79 +336,12 @@ func (q *QueueProtocol) GetBlockHash(param *types.ReqInt) (*types.ReplyHash, err
 		log.Error("GetBlockHash", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetBlockHash, param)
+	msg, err := q.send(blockchainKey, types.EventGetBlockHash, param)
 	if err != nil {
 		log.Error("GetBlockHash", "Error", err.Error())
 		return nil, err
 	}
 	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// GenSeed generate seed return the seed
-func (q *QueueProtocol) GenSeed(param *types.GenSeedLang) (*types.ReplySeed, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("GenSeed", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventGenSeed, param)
-	if err != nil {
-		log.Error("GenSeed", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.ReplySeed); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// SaveSeed save the wallet seed
-func (q *QueueProtocol) SaveSeed(param *types.SaveSeedByPw) (*types.Reply, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("SaveSeed", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventSaveSeed, param)
-	if err != nil {
-		log.Error("SaveSeed", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.Reply); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// GetSeed get seed from wallet
-func (q *QueueProtocol) GetSeed(param *types.GetSeedByPw) (*types.ReplySeed, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("GetSeed", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventGetSeed, param)
-	if err != nil {
-		log.Error("GetSeed", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.ReplySeed); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
-// GetWalletStatus get wallet current status
-func (q *QueueProtocol) GetWalletStatus() (*types.WalletStatus, error) {
-	msg, err := q.query(walletKey, types.EventGetWalletStatus, &types.ReqNil{})
-	if err != nil {
-		log.Error("GetWalletStatus", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.WalletStatus); ok {
 		return reply, nil
 	}
 	return nil, types.ErrTypeAsset
@@ -607,7 +365,7 @@ func (q *QueueProtocol) QueryConsensus(param *types.ChainExecutor) (types.Messag
 		log.Error("ExecWallet", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(consensusKey, types.EventConsensusQuery, param)
+	msg, err := q.send(consensusKey, types.EventConsensusQuery, param)
 	if err != nil {
 		log.Error("query QueryConsensus", "Error", err.Error())
 		return nil, err
@@ -647,7 +405,7 @@ func (q *QueueProtocol) ExecWallet(param *types.ChainExecutor) (types.Message, e
 		log.Error("ExecWallet", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(walletKey, types.EventWalletExecutor, param)
+	msg, err := q.send(walletKey, types.EventWalletExecutor, param)
 	if err != nil {
 		log.Error("ExecWallet", "Error", err.Error())
 		return nil, err
@@ -658,27 +416,9 @@ func (q *QueueProtocol) ExecWallet(param *types.ChainExecutor) (types.Message, e
 	return nil, types.ErrTypeAsset
 }
 
-// DumpPrivkey dump privkey by wallet
-func (q *QueueProtocol) DumpPrivkey(param *types.ReqString) (*types.ReplyString, error) {
-	if param == nil {
-		err := types.ErrInvalidParam
-		log.Error("DumpPrivkey", "Error", err)
-		return nil, err
-	}
-	msg, err := q.query(walletKey, types.EventDumpPrivkey, param)
-	if err != nil {
-		log.Error("DumpPrivkey", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.ReplyString); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
 // IsSync query the blockchain sync state
 func (q *QueueProtocol) IsSync() (*types.Reply, error) {
-	msg, err := q.query(blockchainKey, types.EventIsSync, &types.ReqNil{})
+	msg, err := q.send(blockchainKey, types.EventIsSync, &types.ReqNil{})
 	if err != nil {
 		log.Error("IsSync", "Error", err.Error())
 		return nil, err
@@ -693,7 +433,7 @@ func (q *QueueProtocol) IsSync() (*types.Reply, error) {
 
 // IsNtpClockSync query the ntp clock sync state
 func (q *QueueProtocol) IsNtpClockSync() (*types.Reply, error) {
-	msg, err := q.query(blockchainKey, types.EventIsNtpClockSync, &types.ReqNil{})
+	msg, err := q.send(blockchainKey, types.EventIsNtpClockSync, &types.ReqNil{})
 	if err != nil {
 		log.Error("IsNtpClockSync", "Error", err.Error())
 		return nil, err
@@ -715,7 +455,7 @@ func (q *QueueProtocol) LocalGet(param *types.LocalDBGet) (*types.LocalReplyValu
 		return nil, err
 	}
 
-	msg, err := q.query(blockchainKey, types.EventLocalGet, param)
+	msg, err := q.send(blockchainKey, types.EventLocalGet, param)
 	if err != nil {
 		log.Error("LocalGet", "Error", err.Error())
 		return nil, err
@@ -726,6 +466,84 @@ func (q *QueueProtocol) LocalGet(param *types.LocalDBGet) (*types.LocalReplyValu
 	return nil, types.ErrTypeAsset
 }
 
+// LocalSet set key value in local db
+func (q *QueueProtocol) LocalSet(param *types.LocalDBSet) error {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("LocalSet", "Error", err)
+		return err
+	}
+	_, err := q.send(blockchainKey, types.EventLocalSet, param)
+	if err != nil {
+		log.Error("LocalSet", "Error", err.Error())
+		return err
+	}
+	return nil
+}
+
+//LocalNew new a localdb object
+func (q *QueueProtocol) LocalNew(param *types.ReqNil) (*types.Int64, error) {
+	msg, err := q.send(blockchainKey, types.EventLocalNew, nil)
+	if err != nil {
+		log.Error("LocalNew", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.Int64); ok {
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+//LocalBegin begin a transaction
+func (q *QueueProtocol) LocalBegin(param *types.Int64) error {
+	_, err := q.send(blockchainKey, types.EventLocalBegin, param)
+	if err != nil {
+		log.Error("LocalBegin", "Error", err.Error())
+		return err
+	}
+	return nil
+}
+
+//LocalClose begin a transaction
+func (q *QueueProtocol) LocalClose(param *types.Int64) error {
+	_, err := q.send(blockchainKey, types.EventLocalClose, param)
+	if err != nil {
+		log.Error("LocalClose", "Error", err.Error())
+		return err
+	}
+	return nil
+}
+
+//LocalCommit commit a transaction
+func (q *QueueProtocol) LocalCommit(param *types.Int64) error {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("LocalCommit", "Error", err)
+		return err
+	}
+	_, err := q.send(blockchainKey, types.EventLocalCommit, param)
+	if err != nil {
+		log.Error("LocalCommit", "Error", err.Error())
+		return err
+	}
+	return nil
+}
+
+//LocalRollback rollback a transaction
+func (q *QueueProtocol) LocalRollback(param *types.Int64) error {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("LocalRollback", "Error", err)
+		return err
+	}
+	_, err := q.send(blockchainKey, types.EventLocalRollback, param)
+	if err != nil {
+		log.Error("LocalRollback", "Error", err.Error())
+		return err
+	}
+	return nil
+}
+
 // LocalList get value list from local db by key list
 func (q *QueueProtocol) LocalList(param *types.LocalDBList) (*types.LocalReplyValue, error) {
 	if param == nil {
@@ -733,8 +551,7 @@ func (q *QueueProtocol) LocalList(param *types.LocalDBList) (*types.LocalReplyVa
 		log.Error("LocalList", "Error", err)
 		return nil, err
 	}
-
-	msg, err := q.query(blockchainKey, types.EventLocalList, param)
+	msg, err := q.send(blockchainKey, types.EventLocalList, param)
 	if err != nil {
 		log.Error("LocalList", "Error", err.Error())
 		return nil, err
@@ -747,7 +564,7 @@ func (q *QueueProtocol) LocalList(param *types.LocalDBList) (*types.LocalReplyVa
 
 // GetLastHeader get the current head detail
 func (q *QueueProtocol) GetLastHeader() (*types.Header, error) {
-	msg, err := q.query(blockchainKey, types.EventGetLastHeader, &types.ReqNil{})
+	msg, err := q.send(blockchainKey, types.EventGetLastHeader, &types.ReqNil{})
 	if err != nil {
 		log.Error("GetLastHeader", "Error", err.Error())
 		return nil, err
@@ -761,13 +578,19 @@ func (q *QueueProtocol) GetLastHeader() (*types.Header, error) {
 }
 
 // Version get the software version
-func (q *QueueProtocol) Version() (*types.Reply, error) {
-	return &types.Reply{IsOk: true, Msg: []byte(version.GetVersion())}, nil
+func (q *QueueProtocol) Version() (*types.VersionInfo, error) {
+	types.AssertConfig(q.client)
+	return &types.VersionInfo{
+		Title:   q.client.GetConfig().GetTitle(),
+		App:     version.GetAppVersion(),
+		Chain33: version.GetVersion(),
+		LocalDb: version.GetLocalDBVersion(),
+	}, nil
 }
 
 // GetNetInfo get the net information
-func (q *QueueProtocol) GetNetInfo() (*types.NodeNetInfo, error) {
-	msg, err := q.query(p2pKey, types.EventGetNetInfo, &types.ReqNil{})
+func (q *QueueProtocol) GetNetInfo(req *types.P2PGetNetInfoReq) (*types.NodeNetInfo, error) {
+	msg, err := q.send(p2pKey, types.EventGetNetInfo, req)
 	if err != nil {
 		log.Error("GetNetInfo", "Error", err.Error())
 		return nil, err
@@ -780,24 +603,24 @@ func (q *QueueProtocol) GetNetInfo() (*types.NodeNetInfo, error) {
 	return nil, err
 }
 
-// SignRawTx sign transaction return the sign tx data
-func (q *QueueProtocol) SignRawTx(param *types.ReqSignRawTx) (*types.ReplySignRawTx, error) {
+// StoreSet set value by statehash and key to statedb
+func (q *QueueProtocol) StoreSet(param *types.StoreSetWithSync) (*types.ReplyHash, error) {
 	if param == nil {
 		err := types.ErrInvalidParam
-		log.Error("Query", "Error", err)
+		log.Error("StoreSet", "Error", err)
 		return nil, err
 	}
-	data := param
-	msg, err := q.query(walletKey, types.EventSignRawTx, data)
+
+	msg, err := q.send(storeKey, types.EventStoreSet, param)
 	if err != nil {
-		log.Error("SignRawTx", "Error", err.Error())
+		log.Error("StoreSet", "Error", err.Error())
 		return nil, err
 	}
-	if reply, ok := msg.GetData().(*types.ReplySignRawTx); ok {
+	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
 		return reply, nil
 	}
 	err = types.ErrTypeAsset
-	log.Error("SignRawTx", "Error", err.Error())
+	log.Error("StoreSet", "Error", err.Error())
 	return nil, err
 }
 
@@ -809,7 +632,7 @@ func (q *QueueProtocol) StoreGet(param *types.StoreGet) (*types.StoreReplyValue,
 		return nil, err
 	}
 
-	msg, err := q.query(storeKey, types.EventStoreGet, param)
+	msg, err := q.send(storeKey, types.EventStoreGet, param)
 	if err != nil {
 		log.Error("StoreGet", "Error", err.Error())
 		return nil, err
@@ -822,6 +645,109 @@ func (q *QueueProtocol) StoreGet(param *types.StoreGet) (*types.StoreReplyValue,
 	return nil, err
 }
 
+// StoreMemSet Memset kvs by statehash to statedb
+func (q *QueueProtocol) StoreMemSet(param *types.StoreSetWithSync) (*types.ReplyHash, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("StoreMemSet", "Error", err)
+		return nil, err
+	}
+
+	msg, err := q.send(storeKey, types.EventStoreMemSet, param)
+	if err != nil {
+		log.Error("StoreMemSet", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
+		return reply, nil
+	}
+	err = types.ErrTypeAsset
+	log.Error("StoreMemSet", "Error", err.Error())
+	return nil, err
+}
+
+// StoreCommit commit kvs by statehash to statedb
+func (q *QueueProtocol) StoreCommit(param *types.ReqHash) (*types.ReplyHash, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("StoreCommit", "Error", err)
+		return nil, err
+	}
+
+	msg, err := q.send(storeKey, types.EventStoreCommit, param)
+	if err != nil {
+		log.Error("StoreCommit", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
+		return reply, nil
+	}
+	err = types.ErrTypeAsset
+	log.Error("StoreCommit", "Error", err.Error())
+	return nil, err
+}
+
+// StoreRollback rollback kvs by statehash to statedb
+func (q *QueueProtocol) StoreRollback(param *types.ReqHash) (*types.ReplyHash, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("StoreRollback", "Error", err)
+		return nil, err
+	}
+
+	msg, err := q.send(storeKey, types.EventStoreRollback, param)
+	if err != nil {
+		log.Error("StoreRollback", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
+		return reply, nil
+	}
+	err = types.ErrTypeAsset
+	log.Error("StoreRollback", "Error", err.Error())
+	return nil, err
+}
+
+// StoreDel del kvs by statehash to statedb
+func (q *QueueProtocol) StoreDel(param *types.StoreDel) (*types.ReplyHash, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("StoreDel", "Error", err)
+		return nil, err
+	}
+
+	msg, err := q.send(storeKey, types.EventStoreDel, param)
+	if err != nil {
+		log.Error("StoreDel", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyHash); ok {
+		return reply, nil
+	}
+	err = types.ErrTypeAsset
+	log.Error("StoreDel", "Error", err.Error())
+	return nil, err
+}
+
+//StoreList query list from statedb
+func (q *QueueProtocol) StoreList(param *types.StoreList) (*types.StoreListReply, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("StoreList", "Error", err)
+		return nil, err
+	}
+
+	msg, err := q.send(storeKey, types.EventStoreList, param)
+	if err != nil {
+		log.Error("StoreList", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.StoreListReply); ok {
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
 // StoreGetTotalCoins get total coins from statedb
 func (q *QueueProtocol) StoreGetTotalCoins(param *types.IterateRangeByStateHash) (*types.ReplyGetTotalCoins, error) {
 	if param == nil {
@@ -829,7 +755,7 @@ func (q *QueueProtocol) StoreGetTotalCoins(param *types.IterateRangeByStateHash)
 		log.Error("StoreGetTotalCoins", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(storeKey, types.EventStoreGetTotalCoins, param)
+	msg, err := q.send(storeKey, types.EventStoreGetTotalCoins, param)
 	if err != nil {
 		log.Error("StoreGetTotalCoins", "Error", err.Error())
 		return nil, err
@@ -842,19 +768,6 @@ func (q *QueueProtocol) StoreGetTotalCoins(param *types.IterateRangeByStateHash)
 	return nil, err
 }
 
-// GetFatalFailure get fatal failure from wallet
-func (q *QueueProtocol) GetFatalFailure() (*types.Int32, error) {
-	msg, err := q.query(walletKey, types.EventFatalFailure, &types.ReqNil{})
-	if err != nil {
-		log.Error("GetFatalFailure", "Error", err.Error())
-		return nil, err
-	}
-	if reply, ok := msg.GetData().(*types.Int32); ok {
-		return reply, nil
-	}
-	return nil, types.ErrTypeAsset
-}
-
 // CloseQueue close client queue
 func (q *QueueProtocol) CloseQueue() (*types.Reply, error) {
 	return q.client.CloseQueue()
@@ -862,7 +775,7 @@ func (q *QueueProtocol) CloseQueue() (*types.Reply, error) {
 
 // GetLastBlockSequence 获取最新的block执行序列号
 func (q *QueueProtocol) GetLastBlockSequence() (*types.Int64, error) {
-	msg, err := q.query(blockchainKey, types.EventGetLastBlockSequence, &types.ReqNil{})
+	msg, err := q.send(blockchainKey, types.EventGetLastBlockSequence, &types.ReqNil{})
 	if err != nil {
 		log.Error("GetLastBlockSequence", "Error", err.Error())
 		return nil, err
@@ -874,14 +787,20 @@ func (q *QueueProtocol) GetLastBlockSequence() (*types.Int64, error) {
 	return nil, types.ErrTypeAsset
 }
 
-// WalletCreateTx create transaction
-func (q *QueueProtocol) WalletCreateTx(param *types.ReqCreateTransaction) (*types.Transaction, error) {
-	msg, err := q.query(walletKey, types.EventWalletCreateTx, param)
-	if err != nil {
-		log.Error("CreateTrasaction", "Error", err.Error())
+// GetSequenceByHash 通过hash获取对应的执行序列号
+func (q *QueueProtocol) GetSequenceByHash(param *types.ReqHash) (*types.Int64, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("GetSequenceByHash", "Error", err)
 		return nil, err
 	}
-	if reply, ok := msg.GetData().(*types.Transaction); ok {
+	msg, err := q.send(blockchainKey, types.EventGetSeqByHash, param)
+	if err != nil {
+		log.Error("GetSequenceByHash", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.Int64); ok {
+
 		return reply, nil
 	}
 	return nil, types.ErrTypeAsset
@@ -894,7 +813,7 @@ func (q *QueueProtocol) GetBlockByHashes(param *types.ReqHashes) (*types.BlockDe
 		log.Error("GetBlockByHashes", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetBlockByHashes, param)
+	msg, err := q.send(blockchainKey, types.EventGetBlockByHashes, param)
 	if err != nil {
 		log.Error("GetBlockByHashes", "Error", err.Error())
 		return nil, err
@@ -907,6 +826,24 @@ func (q *QueueProtocol) GetBlockByHashes(param *types.ReqHashes) (*types.BlockDe
 	return nil, err
 }
 
+// GetBlockBySeq get block detail and hash by seq
+func (q *QueueProtocol) GetBlockBySeq(param *types.Int64) (*types.BlockSeq, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("GetBlockBySeq", "Error", err)
+		return nil, err
+	}
+	msg, err := q.send(blockchainKey, types.EventGetBlockBySeq, param)
+	if err != nil {
+		log.Error("GetBlockBySeq", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.BlockSeq); ok {
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
 // GetBlockSequences block执行序列号
 func (q *QueueProtocol) GetBlockSequences(param *types.ReqBlocks) (*types.BlockSequences, error) {
 	if param == nil {
@@ -914,7 +851,7 @@ func (q *QueueProtocol) GetBlockSequences(param *types.ReqBlocks) (*types.BlockS
 		log.Error("GetBlockSequences", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(blockchainKey, types.EventGetBlockSequences, param)
+	msg, err := q.send(blockchainKey, types.EventGetBlockSequences, param)
 	if err != nil {
 		log.Error("GetBlockSequences", "Error", err.Error())
 		return nil, err
@@ -934,7 +871,7 @@ func (q *QueueProtocol) QueryChain(param *types.ChainExecutor) (types.Message, e
 		log.Error("QueryChain", "Error", err)
 		return nil, err
 	}
-	msg, err := q.query(executorKey, types.EventBlockChainQuery, param)
+	msg, err := q.send(executorKey, types.EventBlockChainQuery, param)
 	if err != nil {
 		log.Error("QueryChain", "Error", err, "driver", param.Driver, "func", param.FuncName)
 		return nil, err
@@ -947,15 +884,145 @@ func (q *QueueProtocol) QueryChain(param *types.ChainExecutor) (types.Message, e
 	return nil, err
 }
 
-// GetTicketCount get ticket count from consensus
-func (q *QueueProtocol) GetTicketCount() (*types.Int64, error) {
-	msg, err := q.query(consensusKey, types.EventGetTicketCount, &types.ReqNil{})
+// AddSeqCallBack Add Seq CallBack
+func (q *QueueProtocol) AddSeqCallBack(param *types.BlockSeqCB) (*types.ReplyAddSeqCallback, error) {
+	msg, err := q.send(blockchainKey, types.EventAddBlockSeqCB, param)
 	if err != nil {
-		log.Error("GetTicketCount", "Error", err.Error())
+		log.Error("AddSeqCallBack", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyAddSeqCallback); ok {
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+// ListSeqCallBack List Seq CallBacks
+func (q *QueueProtocol) ListSeqCallBack() (*types.BlockSeqCBs, error) {
+
+	msg, err := q.send(blockchainKey, types.EventListBlockSeqCB, &types.ReqNil{})
+	if err != nil {
+		log.Error("ListSeqCallBack", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.BlockSeqCBs); ok {
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+// GetSeqCallBackLastNum Get Seq Call Back Last Num
+func (q *QueueProtocol) GetSeqCallBackLastNum(param *types.ReqString) (*types.Int64, error) {
+
+	msg, err := q.send(blockchainKey, types.EventGetSeqCBLastNum, param)
+	if err != nil {
+		log.Error("ListSeqCallBack", "Error", err.Error())
 		return nil, err
 	}
 	if reply, ok := msg.GetData().(*types.Int64); ok {
 		return reply, nil
 	}
 	return nil, types.ErrTypeAsset
+}
+
+// GetLastBlockMainSequence 获取最新的block执行序列号
+func (q *QueueProtocol) GetLastBlockMainSequence() (*types.Int64, error) {
+	msg, err := q.send(blockchainKey, types.EventGetLastBlockMainSequence, &types.ReqNil{})
+	if err != nil {
+		log.Error("GetLastBlockMainSequence", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.Int64); ok {
+
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+// GetMainSequenceByHash 通过hash获取对应的执行序列号
+func (q *QueueProtocol) GetMainSequenceByHash(param *types.ReqHash) (*types.Int64, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("GetMainSequenceByHash", "Error", err)
+		return nil, err
+	}
+	msg, err := q.send(blockchainKey, types.EventGetMainSeqByHash, param)
+	if err != nil {
+		log.Error("GetMainSequenceByHash", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.Int64); ok {
+
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+//GetParaTxByTitle 通过seq以及title获取对应平行连的交易
+func (q *QueueProtocol) GetParaTxByTitle(param *types.ReqParaTxByTitle) (*types.ParaTxDetails, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("GetParaTxByTitle", "Error", err)
+		return nil, err
+	}
+	msg, err := q.send(blockchainKey, types.EventGetParaTxByTitle, param)
+	if err != nil {
+		log.Error("GetParaTxByTitle", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ParaTxDetails); ok {
+
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+//LoadParaTxByTitle //获取拥有此title交易的区块高度
+func (q *QueueProtocol) LoadParaTxByTitle(param *types.ReqHeightByTitle) (*types.ReplyHeightByTitle, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("LoadParaTxByTitle", "Error", err)
+		return nil, err
+	}
+	msg, err := q.send(blockchainKey, types.EventGetHeightByTitle, param)
+	if err != nil {
+		log.Error("LoadParaTxByTitle", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ReplyHeightByTitle); ok {
+
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+//GetParaTxByHeight //通过区块高度列表+title获取平行链交易
+func (q *QueueProtocol) GetParaTxByHeight(param *types.ReqParaTxByHeight) (*types.ParaTxDetails, error) {
+	if param == nil {
+		err := types.ErrInvalidParam
+		log.Error("GetParaTxByHeight", "Error", err)
+		return nil, err
+	}
+	msg, err := q.send(blockchainKey, types.EventGetParaTxByTitleAndHeight, param)
+	if err != nil {
+		log.Error("GetParaTxByHeight", "Error", err.Error())
+		return nil, err
+	}
+	if reply, ok := msg.GetData().(*types.ParaTxDetails); ok {
+
+		return reply, nil
+	}
+	return nil, types.ErrTypeAsset
+}
+
+//GetConfig 通过seq以及title获取对应平行连的交易
+func (q *QueueProtocol) GetConfig() *types.Chain33Config {
+	if q.client == nil {
+		panic("client is nil, can not get Chain33Config")
+	}
+	cfg := q.client.GetConfig()
+	if cfg == nil {
+		panic("Chain33Config is nil")
+	}
+	return cfg
 }

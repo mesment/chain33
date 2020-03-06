@@ -4,14 +4,13 @@
 
 // +build go1.8
 
-package cli
-
-//说明：
-//main 函数会加载各个模块，组合成区块链程序
+// package cli RunChain33函数会加载各个模块，组合成区块链程序
 //主循环由消息队列驱动。
 //消息队列本身可插拔，可以支持各种队列
 //同时共识模式也是可以插拔的。
 //rpc 服务也是可以插拔的
+
+package cli
 
 import (
 	"flag"
@@ -19,13 +18,17 @@ import (
 	"net/http"
 	_ "net/http/pprof" //
 	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
+
+	p2pmgr "github.com/33cn/chain33/p2p/manage"
+
+	"github.com/33cn/chain33/metrics"
 
 	"time"
 
 	"github.com/33cn/chain33/blockchain"
+	"github.com/33cn/chain33/util"
 
 	"github.com/33cn/chain33/common"
 	"github.com/33cn/chain33/common/limits"
@@ -35,27 +38,31 @@ import (
 	"github.com/33cn/chain33/consensus"
 	"github.com/33cn/chain33/executor"
 	"github.com/33cn/chain33/mempool"
-	"github.com/33cn/chain33/p2p"
 	"github.com/33cn/chain33/queue"
 	"github.com/33cn/chain33/rpc"
 	"github.com/33cn/chain33/store"
 	"github.com/33cn/chain33/types"
 	"github.com/33cn/chain33/wallet"
-	"golang.org/x/net/trace"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
 )
 
 var (
-	cpuNum     = runtime.NumCPU()
-	configPath = flag.String("f", "", "configfile")
-	datadir    = flag.String("datadir", "", "data dir of chain33, include logs and datas")
-	versionCmd = flag.Bool("v", false, "version")
-	fixtime    = flag.Bool("fixtime", false, "fix time")
+	cpuNum      = runtime.NumCPU()
+	configPath  = flag.String("f", "", "configfile")
+	datadir     = flag.String("datadir", "", "data dir of chain33, include logs and datas")
+	versionCmd  = flag.Bool("v", false, "version")
+	fixtime     = flag.Bool("fixtime", false, "fix time")
+	waitPid     = flag.Bool("waitpid", false, "p2p stuck until seed save info wallet & wallet unlock")
+	rollback    = flag.Int64("rollback", 0, "rollback block")
+	save        = flag.Bool("save", false, "rollback save temporary block")
+	importFile  = flag.String("import", "", "import block file name")
+	exportTitle = flag.String("export", "", "export block title name")
+	fileDir     = flag.String("filedir", "", "import/export block file dir,defalut current path")
+	startHeight = flag.Int64("startheight", 0, "export block start height")
 )
 
 //RunChain33 : run Chain33
-func RunChain33(name string) {
+func RunChain33(name, defCfg string) {
 	flag.Parse()
 	if *versionCmd {
 		fmt.Println(version.GetVersion())
@@ -68,25 +75,37 @@ func RunChain33(name string) {
 			*configPath = name + ".toml"
 		}
 	}
-	d, _ := os.Getwd()
+	d, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
 	log.Info("current dir:", "dir", d)
-	os.Chdir(pwd())
-	d, _ = os.Getwd()
+	err = os.Chdir(pwd())
+	if err != nil {
+		panic(err)
+	}
+	d, err = os.Getwd()
+	if err != nil {
+		panic(err)
+	}
 	log.Info("current dir:", "dir", d)
-	err := limits.SetLimits()
+	err = limits.SetLimits()
 	if err != nil {
 		panic(err)
 	}
 	//set config: bityuan 用 bityuan.toml 这个配置文件
-	cfg, sub := types.InitCfg(*configPath)
+	chain33Cfg := types.NewChain33Config(types.MergeCfg(types.ReadFile(*configPath), defCfg))
+	cfg := chain33Cfg.GetModuleConfig()
 	if *datadir != "" {
-		resetDatadir(cfg, *datadir)
+		util.ResetDatadir(cfg, *datadir)
 	}
 	if *fixtime {
 		cfg.FixTime = *fixtime
 	}
-	//set test net flag
-	types.Init(cfg.Title, cfg)
+	if *waitPid {
+		cfg.P2P.WaitPid = *waitPid
+	}
+
 	if cfg.FixTime {
 		go fixtimeRoutine()
 	}
@@ -112,76 +131,92 @@ func RunChain33(name string) {
 	//set pprof
 	go func() {
 		if cfg.Pprof != nil {
-			http.ListenAndServe(cfg.Pprof.ListenAddr, nil)
+			err := http.ListenAndServe(cfg.Pprof.ListenAddr, nil)
+			if err != nil {
+				log.Info("ListenAndServe", "listen addr", cfg.Pprof.ListenAddr, "err", err)
+			}
 		} else {
-			http.ListenAndServe("localhost:6060", nil)
+			err := http.ListenAndServe("localhost:6060", nil)
+			if err != nil {
+				log.Info("ListenAndServe", "listen addr localhost:6060 err", err)
+			}
 		}
 	}()
-	//set trace
-	grpc.EnableTracing = true
-	go startTrace()
 	//set maxprocs
 	runtime.GOMAXPROCS(cpuNum)
-	//check mvcc switch，if use kvmvcc then cfg.Exec.EnableMVCC should be always false.
-	/*todo
-	if cfg.Store.Name == "kvmvcc" {
-		if cfg.Exec.EnableMVCC {
-			log.Error("store type is kvmvcc but enableMVCC is configured true.")
-			panic("store type is kvmvcc, configure item enableMVCC should be false.please check it.")
-		}
-	}
-	*/
 	//开始区块链模块加载
 	//channel, rabitmq 等
-	log.Info(cfg.Title + " " + version.GetVersion())
+	version.SetLocalDBVersion(cfg.Store.LocalDBVersion)
+	version.SetStoreDBVersion(cfg.Store.StoreDBVersion)
+	version.SetAppVersion(cfg.Version)
+	log.Info(cfg.Title + "-app:" + version.GetAppVersion() + " chain33:" + version.GetVersion() + " localdb:" + version.GetLocalDBVersion() + " statedb:" + version.GetStoreDBVersion())
 	log.Info("loading queue")
 	q := queue.New("channel")
+	q.SetConfig(chain33Cfg)
 
 	log.Info("loading mempool module")
-	mem := mempool.New(cfg.MemPool)
+	mem := mempool.New(chain33Cfg)
 	mem.SetQueueClient(q.Client())
 
 	log.Info("loading execs module")
-	exec := executor.New(cfg.Exec, sub.Exec)
+	exec := executor.New(chain33Cfg)
 	exec.SetQueueClient(q.Client())
 
-	log.Info("loading store module")
-	s := store.New(cfg.Store, sub.Store)
-	s.SetQueueClient(q.Client())
-
 	log.Info("loading blockchain module")
-	chain := blockchain.New(cfg.BlockChain)
+	cfg.BlockChain.RollbackBlock = *rollback
+	cfg.BlockChain.RollbackSave = *save
+	chain := blockchain.New(chain33Cfg)
 	chain.SetQueueClient(q.Client())
 
-	chain.UpgradeChain()
+	log.Info("loading store module")
+	s := store.New(chain33Cfg)
+	s.SetQueueClient(q.Client())
+
+	chain.Upgrade()
 
 	log.Info("loading consensus module")
-	cs := consensus.New(cfg.Consensus, sub.Consensus)
+	cs := consensus.New(chain33Cfg)
 	cs.SetQueueClient(q.Client())
 
-	var network *p2p.P2p
-	if cfg.P2P.Enable {
-		log.Info("loading p2p module")
-		network = p2p.New(cfg.P2P)
-		network.SetQueueClient(q.Client())
-	}
 	//jsonrpc, grpc, channel 三种模式
-	rpcapi := rpc.New(cfg.Rpc)
+	rpcapi := rpc.New(chain33Cfg)
 	rpcapi.SetQueueClient(q.Client())
 
 	log.Info("loading wallet module")
-	walletm := wallet.New(cfg.Wallet, sub.Wallet)
+	walletm := wallet.New(chain33Cfg)
 	walletm.SetQueueClient(q.Client())
+
+	chain.Rollbackblock()
+	//导入/导出区块通过title
+	if *importFile != "" {
+		chain.ImportBlockProc(*importFile, *fileDir)
+	}
+	if *exportTitle != "" {
+		chain.ExportBlockProc(*exportTitle, *fileDir, *startHeight)
+	}
+	log.Info("loading p2p module")
+	var network queue.Module
+	if cfg.P2P.Enable && !chain33Cfg.IsPara() {
+		network = p2pmgr.NewP2PMgr(chain33Cfg)
+	} else {
+		network = &util.MockModule{Key: "p2p"}
+	}
+	network.SetQueueClient(q.Client())
+
+	health := util.NewHealthCheckServer(q.Client())
+	health.Start(cfg.Health)
+	metrics.StartMetrics(chain33Cfg)
 	defer func() {
+		os.Exit(0)
 		//close all module,clean some resource
+		log.Info("begin close health module")
+		health.Close()
 		log.Info("begin close blockchain module")
 		chain.Close()
 		log.Info("begin close mempool module")
 		mem.Close()
-		if cfg.P2P.Enable {
-			log.Info("begin close P2P module")
-			network.Close()
-		}
+		log.Info("begin close P2P module")
+		network.Close()
 		log.Info("begin close execs module")
 		exec.Close()
 		log.Info("begin close store module")
@@ -197,31 +232,6 @@ func RunChain33(name string) {
 
 	}()
 	q.Start()
-}
-
-func resetDatadir(cfg *types.Config, datadir string) {
-	// Check in case of paths like "/something/~/something/"
-	if datadir[:2] == "~/" {
-		usr, _ := user.Current()
-		dir := usr.HomeDir
-		datadir = filepath.Join(dir, datadir[2:])
-	}
-	log.Info("current user data dir is ", "dir", datadir)
-	cfg.Log.LogFile = filepath.Join(datadir, cfg.Log.LogFile)
-	cfg.BlockChain.DbPath = filepath.Join(datadir, cfg.BlockChain.DbPath)
-	cfg.P2P.DbPath = filepath.Join(datadir, cfg.P2P.DbPath)
-	cfg.Wallet.DbPath = filepath.Join(datadir, cfg.Wallet.DbPath)
-	cfg.Store.DbPath = filepath.Join(datadir, cfg.Store.DbPath)
-}
-
-// 开启trace
-
-func startTrace() {
-	trace.AuthRequest = func(req *http.Request) (any, sensitive bool) {
-		return true, true
-	}
-	go http.ListenAndServe("localhost:50051", nil)
-	log.Info("Trace listen on localhost:50051")
 }
 
 func createFile(filename string) (*os.File, error) {
