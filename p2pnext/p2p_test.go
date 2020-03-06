@@ -2,13 +2,16 @@ package p2pnext
 
 import (
 	"context"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p-core/metrics"
+	"github.com/libp2p/go-libp2p-core/network"
+	swarm "github.com/libp2p/go-libp2p-swarm"
 	"testing"
-
+	"fmt"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/protocol"
 
 	"crypto/rand"
-
 	l "github.com/33cn/chain33/common/log"
 	"github.com/33cn/chain33/p2p/manage"
 	pmgr "github.com/33cn/chain33/p2p/manage"
@@ -18,6 +21,8 @@ import (
 	"github.com/33cn/chain33/queue"
 	"github.com/33cn/chain33/types"
 	"github.com/33cn/chain33/wallet"
+	circuit "github.com/libp2p/go-libp2p-circuit"
+	"github.com/multiformats/go-multiaddr"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -231,6 +236,90 @@ func testStreamEOFReSet(t *testing.T) {
 
 }
 
+func TestRelay(t *testing.T)  {
+	r := rand.Reader
+	prvKey1, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		panic(err)
+	}
+	r = rand.Reader
+	prvKey2, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		panic(err)
+	}
+
+	r = rand.Reader
+	prvKey3, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		panic(err)
+	}
+
+	msgID := "/relaymsg"
+	var h1options  []libp2p.Option
+	var h2options  []libp2p.Option
+	var h3options  []libp2p.Option
+	h1options = append(h1options,libp2p.Identity(prvKey1),
+		libp2p.BandwidthReporter(metrics.NewBandwidthCounter()),
+		libp2p.NATPortMap(), libp2p.EnableRelay(circuit.OptDiscovery))
+	h2options = append(h2options,libp2p.Identity(prvKey2),
+		libp2p.BandwidthReporter(metrics.NewBandwidthCounter()),
+		libp2p.NATPortMap(),libp2p.EnableRelay(circuit.OptHop))
+	h3options = append(h3options,libp2p.Identity(prvKey3),
+		libp2p.BandwidthReporter(metrics.NewBandwidthCounter()),
+		libp2p.NATPortMap(),libp2p.EnableRelay())
+
+	h1 := newRelayHost(9980, h1options...)
+	h2 := newRelayHost(9981, h2options...)
+	h3 := newRelayHost(9982, h3options...)
+
+	h2info := peer.AddrInfo{
+		ID:    h2.ID(),
+		Addrs: h2.Addrs(),
+	}
+	err = h1.Connect(context.Background(), h2info)
+	assert.NoError(t, err)
+
+	err = h3.Connect(context.Background(), h2info)
+	assert.NoError(t, err)
+
+	h3.SetStreamHandler(protocol.ID(msgID), func(s network.Stream) {
+		fmt.Println("Got Relay msg!")
+		s.Close()
+	})
+
+	_, err = h1.NewStream(context.Background(), h3.ID(), protocol.ID(msgID))
+	assert.True(t, err != nil)
+
+	relayaddr, err := multiaddr.NewMultiaddr("/p2p-circuit/ipfs/" + h3.ID().Pretty())
+	if err != nil {
+		panic(err)
+	}
+	h3relayInfo := peer.AddrInfo{
+		ID:    h3.ID(),
+		Addrs: []multiaddr.Multiaddr{relayaddr},
+	}
+	h1.Network().(*swarm.Swarm).Backoff().Clear(h3.ID())
+	err = h1.Connect(context.Background(), h3relayInfo)
+	assert.NoError(t, err)
+	s, err := h1.NewStream(context.Background(), h3.ID(), protocol.ID(msgID))
+	s.Write([]byte("test"))
+	assert.NoError(t, err)
+	s.Read(make([]byte, 1))
+
+}
+func newRelayHost(port int, opts ...libp2p.Option) core.Host {
+	m, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port))
+	if err != nil {
+		return nil
+	}
+	optArr := append(opts, libp2p.ListenAddrs(m))
+	options := libp2p.ChainOptions(optArr...)
+	host, err := libp2p.New(context.Background(), options)
+	if err != nil {
+		panic(err)
+	}
+	return host
+}
 func Test_p2p(t *testing.T) {
 
 	cfg := types.NewChain33Config(types.ReadFile("../cmd/chain33/chain33.test.toml"))

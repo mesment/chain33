@@ -61,6 +61,8 @@ func (d *Discovery) InitDht(host host.Host, seeds []string, peersInfo []peer.Add
 	if err := d.KademliaDHT.Bootstrap(context.Background()); err != nil {
 		panic(err)
 	}
+	d.routingDiscovery = discovery.NewRoutingDiscovery(d.KademliaDHT)
+	discovery.Advertise(context.Background(), d.routingDiscovery, RendezvousString)
 
 	return
 }
